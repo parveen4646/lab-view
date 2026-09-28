@@ -2,21 +2,24 @@ import os
 import logging
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 import uvicorn
 
 from config import Config
+from middleware.monitoring import MonitoringMiddleware
 from services.pdf_extractor import PDFExtractor
 from services.llm_analyzer import ClaudeAnalyzer
 from services.data_formatter import DataFormatter
+from services.evaluator import evaluator
+from services.guardrails import input_guardrails, output_guardrails
 from utils.file_handler import FileHandler
+from utils.metrics import metrics_store
 from utils.validators import ValidationError
-from models.schemas import ProcessingResponse, PatientInfo, LabResult
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +33,7 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# ── Middleware (order matters: CORS first, then monitoring) ───────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=Config.CORS_ORIGINS,
@@ -37,17 +41,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(MonitoringMiddleware)
 
-# Services — instantiated once at startup
+# ── Services ──────────────────────────────────────────────────────────────────
 pdf_extractor = PDFExtractor()
 claude_analyzer = ClaudeAnalyzer()
 data_formatter = DataFormatter()
 file_handler = FileHandler(Config.UPLOAD_FOLDER)
 
 
-# ---------------------------------------------------------------------------
-# Request / response models
-# ---------------------------------------------------------------------------
+# ── Request / response models ─────────────────────────────────────────────────
 
 class TextAnalysisRequest(BaseModel):
     text: str
@@ -59,12 +62,7 @@ class APIResponse(BaseModel):
     message: Optional[str] = None
     error: Optional[str] = None
     data: Optional[Any] = None
-    details: Optional[str] = None
 
-
-# ---------------------------------------------------------------------------
-# Dependency
-# ---------------------------------------------------------------------------
 
 def get_services() -> Dict[str, Any]:
     return {
@@ -75,9 +73,7 @@ def get_services() -> Dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Exception handlers
-# ---------------------------------------------------------------------------
+# ── Exception handlers ────────────────────────────────────────────────────────
 
 @app.exception_handler(ValidationError)
 async def validation_exception_handler(request, exc):
@@ -99,14 +95,12 @@ async def http_exception_handler(request, exc):
 async def general_exception_handler(request, exc):
     logger.error("Unhandled error: %s", exc)
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        status_code=500,
         content={"success": False, "error": "Internal server error"},
     )
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
+# ── Core endpoints ────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
@@ -115,18 +109,21 @@ async def root():
         "version": "2.0.0",
         "docs": "/docs",
         "health": "/health",
+        "stats": "/api/stats",
+        "metrics": "/metrics",
     }
 
 
 @app.get("/health")
 async def health_check():
-    api_key_set = bool(Config.ANTHROPIC_API_KEY)
     return {
         "status": "healthy",
         "services": {
             "pdf_extractor": "available",
-            "claude_api": "configured" if api_key_set else "missing ANTHROPIC_API_KEY",
-            "file_handler": "available",
+            "claude_api": "configured" if Config.ANTHROPIC_API_KEY else "missing ANTHROPIC_API_KEY",
+            "guardrails": "active",
+            "evaluator": "active",
+            "monitoring": "active",
         },
         "models": {
             "extraction": Config.CLAUDE_EXTRACTION_MODEL,
@@ -134,6 +131,24 @@ async def health_check():
         },
         "timestamp": datetime.now().isoformat(),
     }
+
+
+# ── Monitoring endpoints ──────────────────────────────────────────────────────
+
+@app.get("/api/stats", summary="API + extraction stats (JSON)")
+async def api_stats():
+    """Human-readable JSON stats: request counts, error rates, latency percentiles,
+    extraction quality distribution, guardrail drop counts."""
+    return metrics_store.to_json()
+
+
+@app.get("/metrics", response_class=PlainTextResponse, summary="Prometheus metrics")
+async def prometheus_metrics():
+    """Prometheus text exposition format — scrape with Datadog agent or Prometheus."""
+    return PlainTextResponse(
+        content=metrics_store.to_prometheus(),
+        media_type="text/plain; version=0.0.4",
+    )
 
 
 @app.get("/api/status")
@@ -147,58 +162,108 @@ async def get_status():
             "qa_model": Config.CLAUDE_QA_MODEL,
             "upload_folder": Config.UPLOAD_FOLDER,
             "max_file_size_mb": Config.MAX_CONTENT_LENGTH // (1024 * 1024),
+            "guardrails": "active",
+            "evaluator": "active",
         },
     }
 
 
+@app.get("/api/models")
+async def get_models():
+    return APIResponse(
+        success=True,
+        data={
+            "extraction_model": Config.CLAUDE_EXTRACTION_MODEL,
+            "qa_model": Config.CLAUDE_QA_MODEL,
+        },
+    )
+
+
+# ── PDF upload ────────────────────────────────────────────────────────────────
+
 @app.post("/api/upload", response_model=APIResponse)
-async def upload_pdf(
-    file: UploadFile = File(...),
-    services=Depends(get_services),
-):
-    """Upload a lab report PDF and return structured lab data."""
+async def upload_pdf(file: UploadFile = File(...)):
+    """
+    Full pipeline:
+      PDF → extract text → INPUT GUARDRAILS → Claude → OUTPUT GUARDRAILS
+      → EVALUATE → format → return
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
-
     if not file_handler.is_allowed_file(file.filename):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
-    temp_filename = f"{uuid.uuid4().hex}_{file.filename}"
-    temp_filepath = os.path.join(Config.UPLOAD_FOLDER, temp_filename)
-
+    temp_path = os.path.join(Config.UPLOAD_FOLDER, f"{uuid.uuid4().hex}_{file.filename}")
     try:
+        # 1. Save to disk
         content = await file.read()
-        with open(temp_filepath, "wb") as f:
+        with open(temp_path, "wb") as f:
             f.write(content)
 
-        logger.info("Extracting content from %s", file.filename)
-        extracted = pdf_extractor.extract_content(temp_filepath)
-
+        # 2. Extract text
+        logger.info("Extracting: %s", file.filename)
+        extracted = pdf_extractor.extract_content(temp_path)
         if extracted.get("status") == "error":
             raise HTTPException(status_code=400, detail="Failed to extract PDF content")
 
-        logger.info("Analyzing with Claude (%s)", Config.CLAUDE_EXTRACTION_MODEL)
+        # 3. INPUT GUARDRAILS — validate the raw text before hitting Claude
+        input_guardrails.validate_pdf_content(extracted)
+
+        # 4. Claude analysis
+        logger.info("Analysing with %s", Config.CLAUDE_EXTRACTION_MODEL)
         analyzed = claude_analyzer.analyze_medical_data(extracted)
 
+        # 5. OUTPUT GUARDRAILS — clean and validate Claude's output
+        analyzed, guardrail_issues, drop_count = output_guardrails.validate_and_clean(analyzed)
+        if guardrail_issues:
+            logger.warning(
+                "%d guardrail correction(s) for %s: %s",
+                len(guardrail_issues), file.filename, guardrail_issues,
+            )
+
+        # 6. EVALUATE — score the extraction quality
+        eval_result = evaluator.evaluate(analyzed)
+        logger.info(
+            "Evaluation — quality=%s completeness=%.2f plausibility=%.2f tests=%d",
+            eval_result.overall_quality,
+            eval_result.completeness_score,
+            eval_result.plausibility_score,
+            eval_result.tests_extracted,
+        )
+
+        # 7. Record to metrics
+        metrics_store.record_extraction(
+            tests_extracted=eval_result.tests_extracted,
+            quality=eval_result.overall_quality,
+            guardrail_drops=drop_count,
+            failed=eval_result.overall_quality == "failed",
+        )
+
+        # 8. Format for frontend
         formatted = data_formatter.format_for_frontend(analyzed)
         formatted["processing_metadata"] = {
             "filename": file.filename,
             "extraction_metadata": extracted.get("metadata", {}),
             "processing_timestamp": datetime.now().isoformat(),
             "model_used": Config.CLAUDE_EXTRACTION_MODEL,
+            "evaluation": eval_result.as_dict(),
+            "guardrail_issues": guardrail_issues,
+            "guardrail_drops": drop_count,
         }
 
-        logger.info("PDF processed successfully: %s", file.filename)
+        logger.info("Done: %s", file.filename)
         return APIResponse(success=True, message="PDF processed successfully", data=formatted)
 
     finally:
-        if os.path.exists(temp_filepath):
-            os.remove(temp_filepath)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
+
+# ── Text analysis (testing / debugging) ──────────────────────────────────────
 
 @app.post("/api/analyze", response_model=APIResponse)
 async def analyze_text(request: TextAnalysisRequest):
-    """Analyze raw text directly (useful for testing without a PDF)."""
+    """Analyze raw text directly — useful for testing without a PDF."""
     extracted = {
         "text": request.text,
         "tables": request.tables,
@@ -206,11 +271,29 @@ async def analyze_text(request: TextAnalysisRequest):
         "status": "success",
     }
 
+    # Still run guardrails so the path is exercised the same way
+    input_guardrails.validate_pdf_content(extracted)
     analyzed = claude_analyzer.analyze_medical_data(extracted)
+    analyzed, guardrail_issues, drop_count = output_guardrails.validate_and_clean(analyzed)
+    eval_result = evaluator.evaluate(analyzed)
+
+    metrics_store.record_extraction(
+        tests_extracted=eval_result.tests_extracted,
+        quality=eval_result.overall_quality,
+        guardrail_drops=drop_count,
+    )
+
     formatted = data_formatter.format_for_frontend(analyzed)
+    formatted["processing_metadata"] = {
+        "evaluation": eval_result.as_dict(),
+        "guardrail_issues": guardrail_issues,
+        "guardrail_drops": drop_count,
+    }
 
     return APIResponse(success=True, message="Text analyzed successfully", data=formatted)
 
+
+# ── Patient stub ──────────────────────────────────────────────────────────────
 
 @app.get("/api/patient/{patient_id}", response_model=APIResponse)
 async def get_patient_data(patient_id: str):
@@ -231,21 +314,7 @@ async def get_patient_data(patient_id: str):
     return APIResponse(success=True, data=mock_data)
 
 
-@app.get("/api/models")
-async def get_models():
-    """Return the Claude models currently configured."""
-    return APIResponse(
-        success=True,
-        data={
-            "extraction_model": Config.CLAUDE_EXTRACTION_MODEL,
-            "qa_model": Config.CLAUDE_QA_MODEL,
-        },
-    )
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle
-# ---------------------------------------------------------------------------
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup_event():
@@ -253,10 +322,8 @@ async def startup_event():
     logger.info("Extraction model : %s", Config.CLAUDE_EXTRACTION_MODEL)
     logger.info("Q&A model        : %s", Config.CLAUDE_QA_MODEL)
     logger.info("Upload folder    : %s", Config.UPLOAD_FOLDER)
-
     if not Config.ANTHROPIC_API_KEY:
         logger.warning("ANTHROPIC_API_KEY is not set — PDF analysis will fail")
-
     os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
 
 
