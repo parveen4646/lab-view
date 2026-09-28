@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -20,6 +21,10 @@ from services.guardrails import input_guardrails, output_guardrails
 from utils.file_handler import FileHandler
 from utils.metrics import metrics_store
 from utils.validators import ValidationError
+from db.database import get_db, init_db
+from db.models import Report, LabResult
+from routers import auth as auth_router
+from routers import reports as reports_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +47,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(MonitoringMiddleware)
+
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(auth_router.router)
+app.include_router(reports_router.router)
 
 # ── Services ──────────────────────────────────────────────────────────────────
 pdf_extractor = PDFExtractor()
@@ -179,10 +188,71 @@ async def get_models():
     )
 
 
+# ── DB persistence helper ─────────────────────────────────────────────────────
+
+def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_used, formatted, analyzed):
+    try:
+        report = Report(
+            user_id=user_id,
+            filename=filename,
+            model_used=model_used,
+            extraction_quality=eval_result.overall_quality,
+            completeness_score=eval_result.completeness_score,
+            plausibility_score=eval_result.plausibility_score,
+            guardrail_drops=drop_count,
+            raw_data=formatted,
+        )
+        db.add(report)
+        db.flush()  # get report.id before committing
+
+        for r in analyzed.get("latestResults", []):
+            ref = r.get("referenceRange") or {}
+            db.add(LabResult(
+                report_id=report.id,
+                test_name=r.get("testName", "unknown"),
+                value=r.get("value"),
+                unit=r.get("unit"),
+                ref_min=ref.get("min"),
+                ref_max=ref.get("max"),
+                status=r.get("status"),
+                category=r.get("category"),
+                test_date=r.get("date"),
+            ))
+
+        db.commit()
+        logger.info("Report %s saved for user %s", report.id, user_id)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("DB save failed (non-fatal): %s", exc)
+
+
 # ── PDF upload ────────────────────────────────────────────────────────────────
 
+_optional_bearer = HTTPBearer(auto_error=False)
+
+
+def _optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_optional_bearer),
+    db=Depends(get_db),
+):
+    """Returns (user, db) when a valid JWT is present, else (None, db)."""
+    if not credentials:
+        return None, db
+    try:
+        from auth.jwt import decode_token
+        from db.models import User as UserModel
+        uid = decode_token(credentials.credentials)
+        user = db.query(UserModel).filter(UserModel.id == uid, UserModel.is_active == True).first()
+        return user, db
+    except Exception:
+        return None, db
+
+
 @app.post("/api/upload", response_model=APIResponse)
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(
+    file: UploadFile = File(...),
+    user_db=Depends(_optional_user),
+):
     """
     Full pipeline:
       PDF → extract text → INPUT GUARDRAILS → Claude → OUTPUT GUARDRAILS
@@ -250,6 +320,20 @@ async def upload_pdf(file: UploadFile = File(...)):
             "guardrail_issues": guardrail_issues,
             "guardrail_drops": drop_count,
         }
+
+        # 9. Persist to DB if user is authenticated
+        current_user, db = user_db
+        if current_user is not None:
+            _save_report_to_db(
+                db=db,
+                user_id=current_user.id,
+                filename=file.filename,
+                eval_result=eval_result,
+                drop_count=drop_count,
+                model_used=Config.CLAUDE_EXTRACTION_MODEL,
+                formatted=formatted,
+                analyzed=analyzed,
+            )
 
         logger.info("Done: %s", file.filename)
         return APIResponse(success=True, message="PDF processed successfully", data=formatted)
@@ -322,9 +406,12 @@ async def startup_event():
     logger.info("Extraction model : %s", Config.CLAUDE_EXTRACTION_MODEL)
     logger.info("Q&A model        : %s", Config.CLAUDE_QA_MODEL)
     logger.info("Upload folder    : %s", Config.UPLOAD_FOLDER)
+    logger.info("Database         : %s", Config.DATABASE_URL.split("://")[0])
     if not Config.ANTHROPIC_API_KEY:
         logger.warning("ANTHROPIC_API_KEY is not set — PDF analysis will fail")
     os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
+    init_db()
+    logger.info("Database tables ready")
 
 
 @app.on_event("shutdown")

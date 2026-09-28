@@ -1,8 +1,8 @@
 import uuid
+import random
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class DataFormatter:
             date = (datetime.now() - timedelta(days=30*i)).strftime("%Y-%m")
             
             # Add realistic variation (±20% of current value)
-            variation = (np.random.random() - 0.5) * 0.4 * current_value
+            variation = (random.random() - 0.5) * 0.4 * current_value
             value = max(0, current_value + variation)
             
             # Simple status determination

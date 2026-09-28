@@ -22,3 +22,12 @@ class Config:
     CORS_ORIGINS = os.getenv(
         "CORS_ORIGINS", "http://localhost:3000,http://localhost:5173"
     ).split(",")
+
+    # Database — SQLite by default; set DATABASE_URL to a postgres:// URI in prod
+    _base_dir = os.path.dirname(os.path.abspath(__file__))
+    _default_db = f"sqlite:///{os.path.join(_base_dir, 'vitals.db')}"
+    DATABASE_URL = os.getenv("DATABASE_URL") or _default_db
+
+    # JWT — defaults to SECRET_KEY if not set
+    JWT_SECRET = os.getenv("JWT_SECRET") or SECRET_KEY
+    ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
