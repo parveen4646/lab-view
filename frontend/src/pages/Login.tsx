@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Stethoscope, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/contexts/AuthContext';
+import { apiService } from '@/services/api';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -18,58 +20,60 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const auth = useAuth();
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
-    setTimeout(() => {
-      if (email && password) {
-        toast({
-          title: "Login Successful",
-          description: "Welcome to MedLab Dashboard",
-        });
-        navigate('/');
-      } else {
-        toast({
-          title: "Login Failed",
-          description: "Please enter valid credentials",
-          variant: "destructive",
-        });
-      }
+    try {
+      const { access_token } = await apiService.loginUser(email, password);
+      // Set token on the service BEFORE calling getMe so it attaches the Bearer header.
+      apiService.setToken(access_token);
+      const user = await apiService.getMe();
+      auth.login(access_token, { id: user.id, email: user.email, full_name: user.full_name });
+      toast({ title: 'Login Successful', description: 'Welcome back to MedLab Dashboard' });
+      navigate('/');
+    } catch (error) {
+      toast({
+        title: 'Login Failed',
+        description: apiService.handleApiError(error),
+        variant: 'destructive',
+      });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
 
-    setTimeout(() => {
-      if (email && password && confirmPassword && fullName) {
-        if (password !== confirmPassword) {
-          toast({
-            title: "Password Mismatch",
-            description: "Passwords do not match",
-            variant: "destructive",
-          });
-          setIsLoading(false);
-          return;
-        }
-        toast({
-          title: "Account Created",
-          description: "Welcome to MedLab Dashboard",
-        });
-        navigate('/');
-      } else {
-        toast({
-          title: "Registration Failed",
-          description: "Please fill in all fields",
-          variant: "destructive",
-        });
-      }
+    if (password !== confirmPassword) {
+      toast({
+        title: 'Password Mismatch',
+        description: 'Passwords do not match',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const { access_token } = await apiService.register(email, password, fullName || undefined);
+      // Set token on the service BEFORE calling getMe so it attaches the Bearer header.
+      apiService.setToken(access_token);
+      const user = await apiService.getMe();
+      auth.login(access_token, { id: user.id, email: user.email, full_name: user.full_name });
+      toast({ title: 'Account Created', description: 'Welcome to MedLab Dashboard' });
+      navigate('/');
+    } catch (error) {
+      toast({
+        title: 'Registration Failed',
+        description: apiService.handleApiError(error),
+        variant: 'destructive',
+      });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -86,14 +90,14 @@ const Login = () => {
             </CardDescription>
           </div>
         </CardHeader>
-        
+
         <CardContent className="px-8 pb-8">
           <Tabs defaultValue="signin" className="w-full">
             <TabsList className="grid w-full grid-cols-2 mb-8 bg-muted h-10">
               <TabsTrigger value="signin" className="text-sm">Sign In</TabsTrigger>
               <TabsTrigger value="signup" className="text-sm">Sign Up</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="signin">
               <form onSubmit={handleSignIn} className="space-y-6">
                 <div className="space-y-2">
@@ -110,7 +114,7 @@ const Login = () => {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="signin-password" className="text-sm text-foreground">
                     Password
@@ -150,7 +154,7 @@ const Login = () => {
                 </Button>
               </form>
             </TabsContent>
-            
+
             <TabsContent value="signup">
               <form onSubmit={handleSignUp} className="space-y-6">
                 <div className="space-y-2">
@@ -164,10 +168,9 @@ const Login = () => {
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     className="h-12 border-border bg-background focus:ring-1 focus:ring-primary"
-                    required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="signup-email" className="text-sm text-foreground">
                     Email
@@ -182,7 +185,7 @@ const Login = () => {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="signup-password" className="text-sm text-foreground">
                     Password
@@ -212,7 +215,7 @@ const Login = () => {
                     </Button>
                   </div>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="confirm-password" className="text-sm text-foreground">
                     Confirm Password
@@ -253,12 +256,6 @@ const Login = () => {
               </form>
             </TabsContent>
           </Tabs>
-
-          <div className="mt-6 text-center">
-            <p className="text-xs text-muted-foreground">
-              Demo: use any email and password
-            </p>
-          </div>
         </CardContent>
       </Card>
     </div>

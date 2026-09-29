@@ -25,6 +25,7 @@ from db.database import get_db, init_db
 from db.models import Report, LabResult
 from routers import auth as auth_router
 from routers import reports as reports_router
+from routers import analytics as analytics_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +52,7 @@ app.add_middleware(MonitoringMiddleware)
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router.router)
 app.include_router(reports_router.router)
+app.include_router(analytics_router.router)
 
 # ── Services ──────────────────────────────────────────────────────────────────
 pdf_extractor = PDFExtractor()
