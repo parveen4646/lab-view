@@ -26,6 +26,7 @@ from db.models import Report, LabResult
 from routers import auth as auth_router
 from routers import reports as reports_router
 from routers import analytics as analytics_router
+from routers import qa as qa_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +54,7 @@ app.add_middleware(MonitoringMiddleware)
 app.include_router(auth_router.router)
 app.include_router(reports_router.router)
 app.include_router(analytics_router.router)
+app.include_router(qa_router.router)
 
 # ── Services ──────────────────────────────────────────────────────────────────
 pdf_extractor = PDFExtractor()
@@ -192,7 +194,7 @@ async def get_models():
 
 # ── DB persistence helper ─────────────────────────────────────────────────────
 
-def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_used, formatted, analyzed):
+def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_used, formatted, analyzed, raw_text=""):
     try:
         report = Report(
             user_id=user_id,
@@ -203,9 +205,13 @@ def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_
             plausibility_score=eval_result.plausibility_score,
             guardrail_drops=drop_count,
             raw_data=formatted,
+            raw_text=raw_text,
         )
         db.add(report)
         db.flush()  # get report.id before committing
+
+        if raw_text:
+            _index_report_for_rag(report.id, filename, raw_text)
 
         for r in analyzed.get("latestResults", []):
             ref = r.get("referenceRange") or {}
@@ -226,6 +232,26 @@ def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_
     except Exception as exc:
         db.rollback()
         logger.warning("DB save failed (non-fatal): %s", exc)
+
+
+def _index_report_for_rag(report_id: str, filename: str, raw_text: str) -> None:
+    """Chunk + embed + upsert this report's free text for the Q&A RAG pipeline. Non-fatal on failure."""
+    try:
+        from services.rag.chunker import chunk_text
+        from services.rag.vector_store import upsert_chunks
+
+        pieces = chunk_text(raw_text, chunk_tokens=400, overlap_tokens=60)
+        if not pieces:
+            return
+        chunks = [p.text for p in pieces]
+        metadatas = [
+            {"corpus": "report", "source": filename, "report_id": report_id, "chunk_index": p.index}
+            for p in pieces
+        ]
+        upsert_chunks(chunks, metadatas)
+        logger.info("Indexed %d chunks for report %s into RAG store", len(chunks), report_id)
+    except Exception as exc:
+        logger.warning("RAG indexing failed (non-fatal): %s", exc)
 
 
 # ── PDF upload ────────────────────────────────────────────────────────────────
@@ -335,6 +361,7 @@ async def upload_pdf(
                 model_used=Config.CLAUDE_EXTRACTION_MODEL,
                 formatted=formatted,
                 analyzed=analyzed,
+                raw_text=extracted.get("text", ""),
             )
 
         logger.info("Done: %s", file.filename)

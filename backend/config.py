@@ -31,3 +31,19 @@ class Config:
     # JWT — defaults to SECRET_KEY if not set
     JWT_SECRET = os.getenv("JWT_SECRET") or SECRET_KEY
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
+    # LLM providers (fallback chain: Gemini → DeepSeek → Claude)
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+    # RAG — Qdrant hybrid (dense + sparse) vector store
+    QDRANT_URL = os.getenv("QDRANT_URL", "")
+    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+    RAG_COLLECTION = os.getenv("RAG_COLLECTION", "labview_kb")
+
+    # RAG — reranker: "bge" (local cross-encoder, default) or "jev" (TypeSafe AI, experimental)
+    RAG_RERANKER = os.getenv("RAG_RERANKER", "bge")
+    TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "")
+    JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")

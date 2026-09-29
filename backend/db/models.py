@@ -44,6 +44,7 @@ class Report(Base):
     plausibility_score: Mapped[Optional[float]] = mapped_column(Float)
     guardrail_drops: Mapped[int] = mapped_column(Integer, default=0)
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    raw_text: Mapped[Optional[str]] = mapped_column(Text)
 
     user: Mapped["User"] = relationship("User", back_populates="reports")
     lab_results: Mapped[list["LabResult"]] = relationship(

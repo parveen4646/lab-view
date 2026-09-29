@@ -19,6 +19,10 @@ env/
 # Uploads (user files, not source)
 backend/uploads/
 
+# SQLite database (user data — never commit)
+backend/*.db
+backend/*.db-journal
+
 # Node
 node_modules/
 .next/

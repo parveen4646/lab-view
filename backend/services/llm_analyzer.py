@@ -3,9 +3,7 @@ import logging
 import re
 from typing import Dict, Any
 
-import anthropic
-
-from config import Config
+from services.llm_router import build_router, LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +60,21 @@ Rules:
 
 
 class ClaudeAnalyzer:
-    """Analyze extracted PDF content using the Claude API."""
+    """
+    Analyze extracted PDF content using the smart LLM router.
+
+    Tries providers in order (Gemini → DeepSeek → Claude) and falls back
+    automatically on rate-limit errors.  The class name is kept for
+    backwards-compatibility with existing imports in app.py.
+    """
 
     def __init__(self) -> None:
-        self._client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-        self._model = Config.CLAUDE_EXTRACTION_MODEL
+        self._router: LLMRouter | None = None
+
+    def _get_router(self) -> LLMRouter:
+        if self._router is None:
+            self._router = build_router()
+        return self._router
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,13 +84,10 @@ class ClaudeAnalyzer:
         """Return structured lab data extracted from *extracted_content*."""
         try:
             prompt = self._build_prompt(extracted_content)
-            raw = self._call_claude(prompt)
+            raw = self._get_router().generate(prompt, max_tokens=2048)
             return self._parse_response(raw)
-        except anthropic.APIError as exc:
-            logger.error("Claude API error during analysis: %s", exc)
-            return self._empty_result()
         except Exception as exc:
-            logger.error("Unexpected error during analysis: %s", exc)
+            logger.error("All LLM providers failed during analysis: %s", exc)
             return self._empty_result()
 
     # ------------------------------------------------------------------
@@ -95,30 +100,20 @@ class ClaudeAnalyzer:
         tables_str = json.dumps(tables[:5], indent=2) if tables else "No tables detected"
         return _EXTRACTION_PROMPT.format(text=text, tables=tables_str)
 
-    def _call_claude(self, prompt: str) -> str:
-        message = self._client.messages.create(
-            model=self._model,
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return message.content[0].text
-
     def _parse_response(self, response: str) -> Dict[str, Any]:
-        # Strip any markdown fences Claude may have added despite instructions
         cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response).strip()
 
         result = self._try_parse(cleaned)
         if result:
             return result
 
-        # Last resort: find the first {...} block in the response
         match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if match:
             result = self._try_parse(match.group())
             if result:
                 return result
 
-        logger.warning("Could not parse Claude response as valid medical JSON")
+        logger.warning("Could not parse LLM response as valid medical JSON")
         return self._empty_result()
 
     def _try_parse(self, text: str) -> Dict[str, Any] | None:
