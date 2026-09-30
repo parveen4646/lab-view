@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 engine = create_engine(
     Config.DATABASE_URL,
     connect_args={"check_same_thread": False} if Config.DATABASE_URL.startswith("sqlite") else {},
+    pool_pre_ping=True,  # Neon/serverless Postgres drops idle connections
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
