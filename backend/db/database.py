@@ -7,9 +7,16 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+_database_url = Config.DATABASE_URL
+if _database_url.startswith("postgresql://"):
+    # Bare "postgresql://" lets SQLAlchemy pick a driver, and it resolves to
+    # the psycopg (v3) dialect if that package is merely importable — we
+    # install psycopg2-binary, so pin the driver explicitly to match.
+    _database_url = "postgresql+psycopg2://" + _database_url[len("postgresql://"):]
+
 engine = create_engine(
-    Config.DATABASE_URL,
-    connect_args={"check_same_thread": False} if Config.DATABASE_URL.startswith("sqlite") else {},
+    _database_url,
+    connect_args={"check_same_thread": False} if _database_url.startswith("sqlite") else {},
     pool_pre_ping=True,  # Neon/serverless Postgres drops idle connections
 )
 

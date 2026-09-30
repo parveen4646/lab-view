@@ -128,6 +128,14 @@ class ApiService {
     return { access_token: result.access_token };
   }
 
+  async loginWithGoogle(credential: string): Promise<{ access_token: string }> {
+    const result = await this.makeRequest<TokenResponse>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    });
+    return { access_token: result.access_token };
+  }
+
   async getMe(): Promise<UserProfile> {
     return this.makeRequest<UserProfile>('/auth/me');
   }
@@ -250,6 +258,7 @@ export const {
   setToken,
   register,
   loginUser,
+  loginWithGoogle,
   getMe,
   getReports,
   getPercentiles,

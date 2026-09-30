@@ -32,6 +32,11 @@ class Config:
     JWT_SECRET = os.getenv("JWT_SECRET") or SECRET_KEY
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
+    # Google Sign-In (OAuth Client ID — separate credential from GOOGLE_API_KEY,
+    # which is for the Gemini LLM API). Created in Google Cloud Console under
+    # APIs & Services → Credentials → OAuth client ID → Web application.
+    GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
     # LLM providers (fallback chain: Gemini → DeepSeek → Claude)
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,6 +9,8 @@ import { Stethoscope, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiService } from '@/services/api';
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -21,6 +23,67 @@ const Login = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const auth = useAuth();
+  const googleButtonRef = useRef<HTMLDivElement>(null);
+
+  const handleGoogleCredential = async (response: { credential: string }) => {
+    setIsLoading(true);
+    try {
+      const { access_token } = await apiService.loginWithGoogle(response.credential);
+      apiService.setToken(access_token);
+      const user = await apiService.getMe();
+      auth.login(access_token, { id: user.id, email: user.email, full_name: user.full_name });
+      toast({ title: 'Login Successful', description: 'Welcome to MedLab Dashboard' });
+      navigate('/');
+    } catch (error) {
+      toast({
+        title: 'Google Sign-In Failed',
+        description: apiService.handleApiError(error),
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Google Identity Services attaches itself to window — no npm package/types
+  // for it, hence `any`. Loaded on demand here (only /login needs it) rather
+  // than as a static <script> tag, so we can reliably wait for it via onload
+  // instead of racing an async script tag against this effect.
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
+
+    const initialize = () => {
+      const google = (window as any).google;
+      if (!google || !googleButtonRef.current) return;
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+      });
+      google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: 'outline',
+        size: 'large',
+        width: 296,
+      });
+    };
+
+    if ((window as any).google) {
+      initialize();
+      return;
+    }
+
+    const existing = document.getElementById('google-identity-script');
+    if (existing) {
+      existing.addEventListener('load', initialize);
+      return () => existing.removeEventListener('load', initialize);
+    }
+
+    const script = document.createElement('script');
+    script.id = 'google-identity-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.onload = initialize;
+    document.body.appendChild(script);
+  }, []);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,6 +155,20 @@ const Login = () => {
         </CardHeader>
 
         <CardContent className="px-8 pb-8">
+          {GOOGLE_CLIENT_ID && (
+            <div className="mb-6 space-y-4">
+              <div ref={googleButtonRef} className="flex justify-center" />
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-border" />
+                </div>
+                <div className="relative flex justify-center text-xs">
+                  <span className="bg-card px-2 text-muted-foreground">or continue with email</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <Tabs defaultValue="signin" className="w-full">
             <TabsList className="grid w-full grid-cols-2 mb-8 bg-muted h-10">
               <TabsTrigger value="signin" className="text-sm">Sign In</TabsTrigger>
