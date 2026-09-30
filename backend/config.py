@@ -37,7 +37,9 @@ class Config:
     # APIs & Services → Credentials → OAuth client ID → Web application.
     GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 
-    # LLM providers (fallback chain: Gemini → DeepSeek → Claude)
+    # LLM providers (fallback chain: Groq → Gemini → DeepSeek → Claude)
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")

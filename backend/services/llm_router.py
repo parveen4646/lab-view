@@ -1,14 +1,15 @@
 """
 LLM fallback router.
 
-Tries providers in order; on a rate-limit (429) it moves to the next one.
-Auth errors and hard failures bubble up immediately from whichever provider
-was attempted.
+Tries providers in order; any failure (rate limit, bad auth, deprecated
+model, billing) moves to the next one. Only raises once every provider in
+the chain has failed.
 
 Default chain (configured via env vars):
-  1. Google Gemini free tier  (GOOGLE_API_KEY)
-  2. DeepSeek V3              (DEEPSEEK_API_KEY)
-  3. Claude Haiku             (ANTHROPIC_API_KEY — uses Anthropic SDK directly)
+  1. Groq free tier           (GROQ_API_KEY)
+  2. Google Gemini free tier  (GOOGLE_API_KEY)
+  3. DeepSeek V3              (DEEPSEEK_API_KEY)
+  4. Claude Haiku             (ANTHROPIC_API_KEY — uses Anthropic SDK directly)
 """
 from __future__ import annotations
 
@@ -81,39 +82,26 @@ class LLMRouter:
         self._providers = providers
 
     def complete(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> tuple[str, str]:
-        """Returns (text, provider_name)."""
-        from openai import RateLimitError as OpenAIRateLimitError
-
+        """Returns (text, provider_name). Any provider failure — rate limit,
+        bad auth, deprecated model, billing — falls through to the next
+        provider; only raises once every provider in the chain has failed."""
+        last_exc: Exception | None = None
         for i, provider in enumerate(self._providers):
             try:
                 text = provider.complete(prompt, max_tokens, json_mode=json_mode)
                 if i > 0:
                     logger.info("LLM fallback succeeded via %s", provider.name)
                 return text, provider.name
-            except OpenAIRateLimitError:
-                logger.warning("Rate limited on %s — trying next provider", provider.name)
-                if i == len(self._providers) - 1:
-                    raise
             except Exception as exc:
-                # For Anthropic rate limits (status 429 in their SDK)
-                if _is_rate_limit(exc):
-                    logger.warning("Rate limited on %s — trying next provider", provider.name)
-                    if i == len(self._providers) - 1:
-                        raise
-                else:
-                    raise
+                logger.warning("%s failed (%s) — trying next provider", provider.name, exc)
+                last_exc = exc
 
-        raise RuntimeError("All LLM providers exhausted")  # unreachable
+        raise last_exc or RuntimeError("All LLM providers exhausted")
 
     # Convenience: just the text
     def generate(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> str:
         text, _ = self.complete(prompt, max_tokens, json_mode=json_mode)
         return text
-
-
-def _is_rate_limit(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return "429" in msg or "rate limit" in msg or "rate_limit" in msg
 
 
 # ── Factory: build router from Config ─────────────────────────────────────────
@@ -122,7 +110,7 @@ def build_router(claude_model: Optional[str] = None) -> LLMRouter:
     """
     Build the provider chain from Config.
     Any provider whose API key is absent is skipped silently.
-    Chain order: Gemini → DeepSeek → Claude.
+    Chain order: Groq → Gemini → DeepSeek → Claude.
 
     claude_model overrides Config.CLAUDE_EXTRACTION_MODEL for the Claude leg —
     used by the Q&A path to request the (larger) CLAUDE_QA_MODEL instead.
@@ -131,7 +119,19 @@ def build_router(claude_model: Optional[str] = None) -> LLMRouter:
 
     providers: list[_Provider] = []
 
-    # 1. Google Gemini (free tier endpoint via AI Studio key)
+    # 1. Groq (free tier, OpenAI-compatible, fast)
+    if Config.GROQ_API_KEY:
+        providers.append(
+            _OpenAICompatProvider(
+                name="groq",
+                model=Config.GROQ_MODEL,
+                base_url="https://api.groq.com/openai/v1",
+                api_key=Config.GROQ_API_KEY,
+            )
+        )
+        logger.info("LLM chain: added Groq (%s)", Config.GROQ_MODEL)
+
+    # 2. Google Gemini (free tier endpoint via AI Studio key)
     if Config.GOOGLE_API_KEY:
         providers.append(
             _OpenAICompatProvider(
@@ -143,7 +143,7 @@ def build_router(claude_model: Optional[str] = None) -> LLMRouter:
         )
         logger.info("LLM chain: added Gemini (%s)", Config.GEMINI_MODEL)
 
-    # 2. DeepSeek V3 (paid, very cheap)
+    # 3. DeepSeek V3 (paid, very cheap)
     if Config.DEEPSEEK_API_KEY:
         providers.append(
             _OpenAICompatProvider(
@@ -155,7 +155,7 @@ def build_router(claude_model: Optional[str] = None) -> LLMRouter:
         )
         logger.info("LLM chain: added DeepSeek (%s)", Config.DEEPSEEK_MODEL)
 
-    # 3. Claude (original fallback — only if key present)
+    # 4. Claude (original fallback — only if key present)
     if Config.ANTHROPIC_API_KEY:
         model = claude_model or Config.CLAUDE_EXTRACTION_MODEL
         providers.append(_ClaudeProvider(model, Config.ANTHROPIC_API_KEY))
