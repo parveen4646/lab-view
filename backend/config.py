@@ -40,7 +40,7 @@ class Config:
     # LLM providers (fallback chain: Gemini → DeepSeek → Claude)
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
     # RAG — Qdrant hybrid (dense + sparse) vector store
