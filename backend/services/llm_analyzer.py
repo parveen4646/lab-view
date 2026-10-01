@@ -2,11 +2,23 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 
+import tiktoken
 from pydantic import BaseModel
 
 from services.llm_router import build_router, LLMRouter
 
 logger = logging.getLogger(__name__)
+
+_ENCODING = tiktoken.get_encoding("cl100k_base")
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate by actual token count, not a chars-per-token guess — the
+    guess is what blew past Groq's free-tier TPM limit (see _MAX_INPUT_TOKENS)."""
+    tokens = _ENCODING.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    return _ENCODING.decode(tokens[:max_tokens])
 
 
 # ── Expected extraction shape ───────────────────────────────────────────────
@@ -106,15 +118,12 @@ Rules:
 """
 
 
-# Input text budget: large multi-page reports (50+ results) can run well past
-# 3000 chars — that was silently dropping everything after roughly page 2.
-_MAX_INPUT_CHARS = 40000
-
-# Output budget: a comprehensive report's JSON (patientInfo + dozens of
-# results + categories) can exceed 2048 tokens, truncating the JSON mid-
-# object. Providers that strictly validate response_format=json_object
-# (e.g. Groq) reject the truncated output outright instead of returning it.
-_MAX_OUTPUT_TOKENS = 8192
+# Groq's free tier caps openai/gpt-oss-20b at 8000 tokens/minute, covering
+# BOTH the prompt and the reserved output budget in one bucket — confirmed
+# via a live 413 ("Requested 12083", limit 8000) against the real API.
+# ~500 tokens of fixed prompt/instructions overhead leaves this split:
+_MAX_INPUT_TOKENS = 4000
+_MAX_OUTPUT_TOKENS = 3000
 
 
 class ClaudeAnalyzer:
@@ -162,7 +171,7 @@ class ClaudeAnalyzer:
     # ------------------------------------------------------------------
 
     def _build_prompt(self, extracted_content: Dict[str, Any]) -> str:
-        text = extracted_content.get("text", "")[:_MAX_INPUT_CHARS]
+        text = _truncate_to_tokens(extracted_content.get("text", ""), _MAX_INPUT_TOKENS)
         tables = extracted_content.get("tables", [])
         tables_str = json.dumps(tables[:5], indent=2) if tables else "No tables detected"
         return _EXTRACTION_PROMPT.format(text=text, tables=tables_str)
