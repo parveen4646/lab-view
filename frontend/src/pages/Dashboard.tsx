@@ -8,7 +8,7 @@ import { TestResultCard } from '@/components/medical/TestResultCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiService, PercentileResponse } from '@/services/api';
 import { MedicalData, LabResult } from '@/types/medical';
-import { Activity, Upload, FileText, Stethoscope } from 'lucide-react';
+import { Activity, Upload, FileText, Stethoscope, LogOut } from 'lucide-react';
 
 // ── Health Score card ─────────────────────────────────────────────────────────
 
@@ -94,6 +94,12 @@ interface NavBarProps {
 
 function NavBar({ user }: NavBarProps) {
   const navigate = useNavigate();
+  const { logout } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <div className="border-b bg-background/95 backdrop-blur">
@@ -123,6 +129,17 @@ function NavBar({ user }: NavBarProps) {
                 <span className="sm:hidden">History</span>
               </Button>
             </Link>
+          )}
+          {user && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 h-8 text-xs"
+              onClick={handleLogout}
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Logout</span>
+            </Button>
           )}
           <Button
             variant="outline"

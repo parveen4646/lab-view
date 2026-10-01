@@ -95,6 +95,24 @@ class ApiService {
         } catch {
           // JSON parse failed; use the generic message
         }
+
+        // 401 with a token attached means the token was rejected (expired or
+        // invalid) — a request made with no token can't hit this branch,
+        // since the backend's optional-auth endpoints just treat that as
+        // anonymous rather than failing. Clear the stale session and force
+        // a fresh app load so every component re-reads the (now-empty) auth
+        // state instead of continuing to act as if still logged in.
+        if (response.status === 401 && this.token) {
+          try {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_user');
+          } catch {
+            // localStorage may be unavailable
+          }
+          this.token = null;
+          window.location.href = '/login';
+        }
+
         throw new Error(errorMessage);
       }
 
