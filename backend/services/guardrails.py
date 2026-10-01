@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from utils.medical_limits import get_limit
+from utils.medical_limits import derive_status, get_limit
 
 logger = logging.getLogger(__name__)
 
@@ -166,13 +166,9 @@ class OutputGuardrails:
 
     @staticmethod
     def _derive_status(value: float, ref: Any) -> str:
-        if isinstance(ref, dict):
-            rmin, rmax = ref.get("min"), ref.get("max")
-            if rmin is not None and value < rmin:
-                return "low"
-            if rmax is not None and value > rmax:
-                return "high"
-        return "normal"
+        if not isinstance(ref, dict):
+            return "normal"
+        return derive_status(value, ref.get("min"), ref.get("max"))
 
     def _clean_patient(
         self, info: dict[str, Any], issues: list[str]

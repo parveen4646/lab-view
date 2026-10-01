@@ -51,6 +51,8 @@ export interface ProcessingMetadata {
   };
   processing_timestamp?: string;
   ollama_available?: boolean;
+  model_used?: string;
+  input_truncated?: boolean;
   evaluation?: {
     completeness_score: number;
     plausibility_score: number;

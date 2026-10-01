@@ -71,6 +71,13 @@ const Upload = () => {
             'This can happen with scanned/image PDFs or unusual report layouts.',
           variant: 'destructive',
         });
+      } else if (reportData.processing_metadata?.input_truncated) {
+        toast({
+          title: 'Report Partially Processed',
+          description:
+            'This report was long enough that only part of it could be analyzed on the ' +
+            'free tier — some results further into the document may be missing.',
+        });
       }
       navigate('/dashboard', { state: { reportData } });
     } catch (error) {

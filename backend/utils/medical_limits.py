@@ -91,3 +91,14 @@ def normalise(name: str) -> str:
 def get_limit(test_name: str) -> tuple[float, float] | None:
     """Return (min, max) absolute biological limits for a test, or None if unknown."""
     return BIOLOGICAL_LIMITS.get(normalise(test_name))
+
+
+def derive_status(value: float, ref_min: float | None, ref_max: float | None) -> str:
+    """Normal/low/high from a value against a reference range — each bound
+    checked independently, so a one-sided range (e.g. HDL "> 40", no upper
+    bound) is still evaluated correctly rather than requiring both ends."""
+    if ref_min is not None and value < ref_min:
+        return "low"
+    if ref_max is not None and value > ref_max:
+        return "high"
+    return "normal"

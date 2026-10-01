@@ -307,11 +307,12 @@ async def upload_pdf(
         # 3. INPUT GUARDRAILS — validate the raw text before hitting Claude
         input_guardrails.validate_pdf_content(extracted)
 
-        # 4. Claude analysis
-        logger.info("Analysing with %s", Config.CLAUDE_EXTRACTION_MODEL)
-        analyzed = claude_analyzer.analyze_medical_data(extracted)
+        # 4. LLM analysis
+        analysis = claude_analyzer.analyze_medical_data(extracted)
+        analyzed = analysis.data
+        logger.info("Analysed with %s", analysis.provider)
 
-        # 5. OUTPUT GUARDRAILS — clean and validate Claude's output
+        # 5. OUTPUT GUARDRAILS — clean and validate the LLM's output
         analyzed, guardrail_issues, drop_count = output_guardrails.validate_and_clean(analyzed)
         if guardrail_issues:
             logger.warning(
@@ -343,7 +344,8 @@ async def upload_pdf(
             "filename": file.filename,
             "extraction_metadata": extracted.get("metadata", {}),
             "processing_timestamp": datetime.now().isoformat(),
-            "model_used": Config.CLAUDE_EXTRACTION_MODEL,
+            "model_used": analysis.provider,
+            "input_truncated": analysis.input_truncated,
             "evaluation": eval_result.as_dict(),
             "guardrail_issues": guardrail_issues,
             "guardrail_drops": drop_count,
@@ -358,7 +360,7 @@ async def upload_pdf(
                 filename=file.filename,
                 eval_result=eval_result,
                 drop_count=drop_count,
-                model_used=Config.CLAUDE_EXTRACTION_MODEL,
+                model_used=analysis.provider,
                 formatted=formatted,
                 analyzed=analyzed,
                 raw_text=extracted.get("text", ""),
@@ -387,8 +389,8 @@ async def analyze_text(request: TextAnalysisRequest):
 
     # Still run guardrails so the path is exercised the same way
     input_guardrails.validate_pdf_content(extracted)
-    analyzed = claude_analyzer.analyze_medical_data(extracted)
-    analyzed, guardrail_issues, drop_count = output_guardrails.validate_and_clean(analyzed)
+    analysis = claude_analyzer.analyze_medical_data(extracted)
+    analyzed, guardrail_issues, drop_count = output_guardrails.validate_and_clean(analysis.data)
     eval_result = evaluator.evaluate(analyzed)
 
     metrics_store.record_extraction(
@@ -399,6 +401,8 @@ async def analyze_text(request: TextAnalysisRequest):
 
     formatted = data_formatter.format_for_frontend(analyzed)
     formatted["processing_metadata"] = {
+        "model_used": analysis.provider,
+        "input_truncated": analysis.input_truncated,
         "evaluation": eval_result.as_dict(),
         "guardrail_issues": guardrail_issues,
         "guardrail_drops": drop_count,
