@@ -370,6 +370,7 @@ async def upload_pdf(
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+            logger.info("Removed temp file: %s", temp_path)
 
 
 # ── Text analysis (testing / debugging) ──────────────────────────────────────
