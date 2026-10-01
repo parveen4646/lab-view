@@ -1,11 +1,58 @@
 import json
 import logging
-import re
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+
+from pydantic import BaseModel
 
 from services.llm_router import build_router, LLMRouter
 
 logger = logging.getLogger(__name__)
+
+
+# ── Expected extraction shape ───────────────────────────────────────────────
+# Passed to instructor as response_model: the provider's structured-output
+# mode (or instructor's own validation retry) enforces this directly,
+# replacing the old approach of regex-extracting a JSON blob from free text
+# and hoping it matched the right shape.
+
+class _ReferenceRange(BaseModel):
+    min: Optional[float] = None
+    max: Optional[float] = None
+
+
+class _PatientInfo(BaseModel):
+    id: str = "unknown"
+    name: Optional[str] = None
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    dateOfBirth: Optional[str] = None
+    lastTestDate: Optional[str] = None
+
+
+class _LabResultItem(BaseModel):
+    id: str
+    testName: str
+    value: float
+    unit: str
+    referenceRange: _ReferenceRange = _ReferenceRange()
+    status: str
+    date: Optional[str] = None
+    category: str
+
+
+class _TestCategory(BaseModel):
+    id: str
+    name: str
+    description: str
+    color: str
+    tests: List[str] = []
+
+
+class _ExtractionResult(BaseModel):
+    patientInfo: _PatientInfo
+    latestResults: List[_LabResultItem] = []
+    testCategories: List[_TestCategory] = []
+
 
 _EXTRACTION_PROMPT = """\
 You are a medical data analyst. Analyze the following medical lab report and extract \
@@ -92,11 +139,20 @@ class ClaudeAnalyzer:
     # ------------------------------------------------------------------
 
     def analyze_medical_data(self, extracted_content: Dict[str, Any]) -> Dict[str, Any]:
-        """Return structured lab data extracted from *extracted_content*."""
+        """Return structured lab data extracted from *extracted_content*.
+
+        Uses instructor's response_model validation instead of manually
+        regex-extracting JSON from free text — a provider returning
+        malformed or wrong-shape output triggers instructor's own retry
+        (same provider, corrective reprompt) before this falls through to
+        the next provider in the chain."""
         try:
             prompt = self._build_prompt(extracted_content)
-            raw = self._get_router().generate(prompt, max_tokens=_MAX_OUTPUT_TOKENS)
-            return self._parse_response(raw)
+            result, provider = self._get_router().complete_structured(
+                prompt, _ExtractionResult, max_tokens=_MAX_OUTPUT_TOKENS
+            )
+            logger.info("Extraction succeeded via %s", provider)
+            return result.model_dump()
         except Exception as exc:
             logger.error("All LLM providers failed during analysis: %s", exc)
             return self._empty_result()
@@ -110,38 +166,6 @@ class ClaudeAnalyzer:
         tables = extracted_content.get("tables", [])
         tables_str = json.dumps(tables[:5], indent=2) if tables else "No tables detected"
         return _EXTRACTION_PROMPT.format(text=text, tables=tables_str)
-
-    def _parse_response(self, response: str) -> Dict[str, Any]:
-        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response).strip()
-
-        result = self._try_parse(cleaned)
-        if result:
-            return result
-
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            result = self._try_parse(match.group())
-            if result:
-                return result
-
-        logger.warning(
-            "Could not parse LLM response as valid medical JSON — raw response (first 1500 chars): %s",
-            response[:1500],
-        )
-        return self._empty_result()
-
-    def _try_parse(self, text: str) -> Dict[str, Any] | None:
-        try:
-            parsed = json.loads(text)
-            return parsed if self._is_valid(parsed) else None
-        except json.JSONDecodeError:
-            return None
-
-    @staticmethod
-    def _is_valid(data: object) -> bool:
-        return isinstance(data, dict) and all(
-            k in data for k in ("patientInfo", "latestResults", "testCategories")
-        )
 
     @staticmethod
     def _empty_result() -> Dict[str, Any]:

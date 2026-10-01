@@ -14,7 +14,8 @@ python-jose[cryptography]==3.3.0
 bcrypt==5.0.0
 google-auth==2.36.0
 scipy==1.14.1
-openai==1.57.0
+openai>=2.0.0,<3.0.0
+instructor==1.17.0
 
 # RAG stack
 qdrant-client==1.12.1

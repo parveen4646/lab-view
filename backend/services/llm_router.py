@@ -14,8 +14,9 @@ Default chain (configured via env vars):
 from __future__ import annotations
 
 import logging
-import re
-from typing import Optional
+from typing import Any, Callable, Optional
+
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +28,23 @@ class _Provider:
     def complete(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> str:
         raise NotImplementedError
 
+    def complete_structured(self, prompt: str, response_model: type[BaseModel], max_tokens: int = 2048) -> BaseModel:
+        raise NotImplementedError
+
 
 class _OpenAICompatProvider(_Provider):
-    """Covers Google Gemini (OpenAI-compat endpoint) and DeepSeek."""
+    """Covers Groq, Google Gemini (OpenAI-compat endpoint), and DeepSeek."""
 
     def __init__(self, name: str, model: str, base_url: str, api_key: str) -> None:
+        import instructor
         from openai import OpenAI
+
         self.name = name
         self._model = model
         self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # JSON mode (not TOOLS) — matches what we've verified these
+        # OpenAI-compatible endpoints actually support reliably.
+        self._structured_client = instructor.from_openai(self._client, mode=instructor.Mode.JSON)
 
     def complete(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> str:
         kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
@@ -48,15 +57,28 @@ class _OpenAICompatProvider(_Provider):
         )
         return resp.choices[0].message.content or ""
 
+    def complete_structured(self, prompt: str, response_model: type[BaseModel], max_tokens: int = 2048) -> BaseModel:
+        return self._structured_client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.1,
+            response_model=response_model,
+            max_retries=2,
+        )
+
 
 class _ClaudeProvider(_Provider):
     """Fallback to Anthropic SDK (original implementation)."""
 
     def __init__(self, model: str, api_key: str) -> None:
         import anthropic
+        import instructor
+
         self.name = "claude"
         self._model = model
         self._client = anthropic.Anthropic(api_key=api_key)
+        self._structured_client = instructor.from_anthropic(self._client)
 
     def complete(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> str:
         msg = self._client.messages.create(
@@ -66,14 +88,24 @@ class _ClaudeProvider(_Provider):
         )
         return msg.content[0].text
 
+    def complete_structured(self, prompt: str, response_model: type[BaseModel], max_tokens: int = 2048) -> BaseModel:
+        return self._structured_client.messages.create(
+            model=self._model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+            response_model=response_model,
+            max_retries=2,
+        )
+
 
 # ── Router ────────────────────────────────────────────────────────────────────
 
 class LLMRouter:
     """
-    Try each provider in order.
-    Rate-limit (429) → move to next provider.
-    Any other error from the *active* provider → raise immediately.
+    Try each provider in order. Any failure — rate limit, bad auth,
+    deprecated model, billing, failed structured-output validation —
+    falls through to the next provider; only raises once every provider
+    in the chain has failed.
     """
 
     def __init__(self, providers: list[_Provider]) -> None:
@@ -81,22 +113,31 @@ class LLMRouter:
             raise ValueError("LLMRouter requires at least one provider")
         self._providers = providers
 
-    def complete(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> tuple[str, str]:
-        """Returns (text, provider_name). Any provider failure — rate limit,
-        bad auth, deprecated model, billing — falls through to the next
-        provider; only raises once every provider in the chain has failed."""
+    def _try_each(self, call: Callable[[_Provider], Any]) -> tuple[Any, str]:
         last_exc: Exception | None = None
         for i, provider in enumerate(self._providers):
             try:
-                text = provider.complete(prompt, max_tokens, json_mode=json_mode)
+                result = call(provider)
                 if i > 0:
                     logger.info("LLM fallback succeeded via %s", provider.name)
-                return text, provider.name
+                return result, provider.name
             except Exception as exc:
                 logger.warning("%s failed (%s) — trying next provider", provider.name, exc)
                 last_exc = exc
 
         raise last_exc or RuntimeError("All LLM providers exhausted")
+
+    def complete(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> tuple[str, str]:
+        """Returns (text, provider_name)."""
+        return self._try_each(lambda p: p.complete(prompt, max_tokens, json_mode=json_mode))
+
+    def complete_structured(
+        self, prompt: str, response_model: type[BaseModel], max_tokens: int = 2048
+    ) -> tuple[BaseModel, str]:
+        """Returns (validated_model_instance, provider_name). Each provider
+        gets its own internal retries (via instructor) before this falls
+        through to the next provider in the chain."""
+        return self._try_each(lambda p: p.complete_structured(prompt, response_model, max_tokens))
 
     # Convenience: just the text
     def generate(self, prompt: str, max_tokens: int = 2048, json_mode: bool = True) -> str:
