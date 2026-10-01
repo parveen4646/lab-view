@@ -61,13 +61,13 @@ Rules:
 
 # Input text budget: large multi-page reports (50+ results) can run well past
 # 3000 chars — that was silently dropping everything after roughly page 2.
-_MAX_INPUT_CHARS = 12000
+_MAX_INPUT_CHARS = 40000
 
 # Output budget: a comprehensive report's JSON (patientInfo + dozens of
 # results + categories) can exceed 2048 tokens, truncating the JSON mid-
 # object. Providers that strictly validate response_format=json_object
 # (e.g. Groq) reject the truncated output outright instead of returning it.
-_MAX_OUTPUT_TOKENS = 4096
+_MAX_OUTPUT_TOKENS = 8192
 
 
 class ClaudeAnalyzer:
@@ -124,7 +124,10 @@ class ClaudeAnalyzer:
             if result:
                 return result
 
-        logger.warning("Could not parse LLM response as valid medical JSON")
+        logger.warning(
+            "Could not parse LLM response as valid medical JSON — raw response (first 1500 chars): %s",
+            response[:1500],
+        )
         return self._empty_result()
 
     def _try_parse(self, text: str) -> Dict[str, Any] | None:

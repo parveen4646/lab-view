@@ -51,6 +51,16 @@ export interface ProcessingMetadata {
   };
   processing_timestamp?: string;
   ollama_available?: boolean;
+  evaluation?: {
+    completeness_score: number;
+    plausibility_score: number;
+    overall_quality: 'high' | 'medium' | 'low' | 'failed';
+    tests_extracted: number;
+    tests_with_ranges: number;
+    tests_with_status: number;
+    patient_fields_present: number;
+    warnings: string[];
+  };
 }
 
 export interface MedicalData {

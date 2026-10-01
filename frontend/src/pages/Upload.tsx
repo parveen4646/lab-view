@@ -62,6 +62,16 @@ const Upload = () => {
     setIsLoading(true);
     try {
       const reportData = await apiService.uploadPDF(selectedFile);
+      const tests = reportData.processing_metadata?.evaluation?.tests_extracted ?? 0;
+      if (tests === 0) {
+        toast({
+          title: 'No Results Extracted',
+          description:
+            "We processed the PDF but couldn't extract any lab values from it. " +
+            'This can happen with scanned/image PDFs or unusual report layouts.',
+          variant: 'destructive',
+        });
+      }
       navigate('/dashboard', { state: { reportData } });
     } catch (error) {
       toast({
