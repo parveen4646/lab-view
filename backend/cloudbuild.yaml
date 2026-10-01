@@ -1,0 +1,41 @@
+# Cloud Build trigger config — runs automatically on push to main.
+# Secrets come from Secret Manager (not this repo); plain config is inline
+# below. See docs/deploy.md section in README-less repo: create secrets with
+# the names referenced in --set-secrets before the first trigger run.
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    dir: 'backend'
+    args:
+      - build
+      - -t
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/lab-view-backend:$SHORT_SHA'
+      - .
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/lab-view-backend:$SHORT_SHA'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - lab-view-backend
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/lab-view-backend:$SHORT_SHA'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=4Gi'
+      - '--cpu=2'
+      - '--max-instances=1'
+      - '--cpu-boost'
+      - '--timeout=600'
+      - '--set-secrets=GROQ_API_KEY=GROQ_API_KEY:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,SECRET_KEY=SECRET_KEY:latest,DATABASE_URL=DATABASE_URL:latest'
+      - '--set-env-vars=^@^GROQ_MODEL=openai/gpt-oss-20b@CLAUDE_EXTRACTION_MODEL=claude-haiku-4-5-20251001@CLAUDE_QA_MODEL=claude-sonnet-5@GEMINI_MODEL=gemini-3.8-flash@DEEPSEEK_MODEL=deepseek-chat@QDRANT_URL=https://eb764ee2-3f0f-4664-9758-72e612e3534a.us-east-1-1.aws.cloud.qdrant.io@RAG_COLLECTION=labview_kb@RAG_RERANKER=bge@DEBUG=False@ACCESS_TOKEN_EXPIRE_MINUTES=60@CORS_ORIGINS=https://lab-view-ms9w9pje4-parveen4646s-projects.vercel.app,http://localhost:5173,http://localhost:3000,http://localhost:8080'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/lab-view-backend:$SHORT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
