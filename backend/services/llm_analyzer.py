@@ -59,6 +59,17 @@ Rules:
 """
 
 
+# Input text budget: large multi-page reports (50+ results) can run well past
+# 3000 chars — that was silently dropping everything after roughly page 2.
+_MAX_INPUT_CHARS = 12000
+
+# Output budget: a comprehensive report's JSON (patientInfo + dozens of
+# results + categories) can exceed 2048 tokens, truncating the JSON mid-
+# object. Providers that strictly validate response_format=json_object
+# (e.g. Groq) reject the truncated output outright instead of returning it.
+_MAX_OUTPUT_TOKENS = 4096
+
+
 class ClaudeAnalyzer:
     """
     Analyze extracted PDF content using the smart LLM router.
@@ -84,7 +95,7 @@ class ClaudeAnalyzer:
         """Return structured lab data extracted from *extracted_content*."""
         try:
             prompt = self._build_prompt(extracted_content)
-            raw = self._get_router().generate(prompt, max_tokens=2048)
+            raw = self._get_router().generate(prompt, max_tokens=_MAX_OUTPUT_TOKENS)
             return self._parse_response(raw)
         except Exception as exc:
             logger.error("All LLM providers failed during analysis: %s", exc)
@@ -95,7 +106,7 @@ class ClaudeAnalyzer:
     # ------------------------------------------------------------------
 
     def _build_prompt(self, extracted_content: Dict[str, Any]) -> str:
-        text = extracted_content.get("text", "")[:3000]
+        text = extracted_content.get("text", "")[:_MAX_INPUT_CHARS]
         tables = extracted_content.get("tables", [])
         tables_str = json.dumps(tables[:5], indent=2) if tables else "No tables detected"
         return _EXTRACTION_PROMPT.format(text=text, tables=tables_str)
