@@ -10,7 +10,7 @@
  *  • After sign-in succeeds, authClient.useSession() in AuthContext updates
  *    automatically — no manual auth.login() call needed here.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Stethoscope, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { authClient } from '@/lib/neon';
+import { useAuth } from '@/contexts/AuthContext';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -31,6 +32,12 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
+
+  // Already signed in (e.g. returning from Google OAuth) → go straight to dashboard
+  useEffect(() => {
+    if (!authLoading && user) navigate('/', { replace: true });
+  }, [user, authLoading, navigate]);
 
   const handleGoogleSignIn = async () => {
     try {

@@ -176,13 +176,57 @@ const Dashboard = () => {
         <div className="p-12 text-center text-muted-foreground text-sm">Loading your reports…</div>
       ) : !activeData ? (
         <div className="p-4 md:p-6">
-          <div className="max-w-7xl mx-auto">
-            <Card>
-              <CardContent className="py-16 text-center space-y-4">
-                <p className="text-muted-foreground text-sm">You haven't uploaded any reports yet.</p>
-                <Button onClick={() => navigate('/upload')}>Upload Your First Report</Button>
-              </CardContent>
-            </Card>
+          <div className="max-w-2xl mx-auto pt-8 space-y-8">
+            {/* Welcome header */}
+            <div className="text-center space-y-2">
+              <h1 className="text-2xl font-light text-foreground">
+                Welcome{user?.full_name ? `, ${user.full_name.split(' ')[0]}` : ''}
+              </h1>
+              <p className="text-muted-foreground text-sm">
+                Upload your first lab report to get started.
+              </p>
+            </div>
+
+            {/* Feature highlights */}
+            <div className="grid sm:grid-cols-3 gap-4">
+              {[
+                {
+                  icon: '📊',
+                  title: 'Instant Analysis',
+                  desc: 'Every test value explained in plain language with normal range context.',
+                },
+                {
+                  icon: '📈',
+                  title: 'Percentile Scores',
+                  desc: 'See how your results compare to the general population.',
+                },
+                {
+                  icon: '💬',
+                  title: 'Ask Questions',
+                  desc: 'Chat with an AI that answers questions about your specific report.',
+                },
+              ].map((f) => (
+                <Card key={f.title} className="border bg-card">
+                  <CardContent className="pt-6 pb-5 text-center space-y-2">
+                    <div className="text-3xl">{f.icon}</div>
+                    <p className="text-sm font-medium text-foreground">{f.title}</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{f.desc}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* CTA */}
+            <div className="text-center">
+              <Button
+                size="lg"
+                className="bg-foreground text-background hover:bg-foreground/90 px-8"
+                onClick={() => navigate('/upload')}
+              >
+                Upload Your First Report
+              </Button>
+              <p className="text-xs text-muted-foreground mt-3">PDF up to 16 MB · results in under a minute</p>
+            </div>
           </div>
         </div>
       ) : activeData.latestResults.length === 0 ? (
