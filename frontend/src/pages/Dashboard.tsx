@@ -4,87 +4,10 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { MedicalDashboard } from '@/components/medical/MedicalDashboard';
 import { PatientCard } from '@/components/medical/PatientCard';
-import { TestResultCard } from '@/components/medical/TestResultCard';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiService, PercentileResponse } from '@/services/api';
-import { MedicalData, LabResult } from '@/types/medical';
-import { Activity, Upload, FileText, Stethoscope, LogOut } from 'lucide-react';
-
-// ── Health Score card ─────────────────────────────────────────────────────────
-
-interface HealthScoreCardProps {
-  score: number | null;
-  summary: string;
-}
-
-function HealthScoreCard({ score, summary }: HealthScoreCardProps) {
-  if (score === null) return null;
-
-  const isGreen = score >= 75;
-  const isYellow = score >= 50 && score < 75;
-  const scoreColor = isGreen ? 'text-green-600' : isYellow ? 'text-yellow-500' : 'text-red-500';
-  const borderBg = isGreen
-    ? 'border-green-200 bg-green-50'
-    : isYellow
-    ? 'border-yellow-200 bg-yellow-50'
-    : 'border-red-200 bg-red-50';
-
-  return (
-    <Card className={`border ${borderBg}`}>
-      <CardContent className="flex items-center gap-6 pt-6 pb-6">
-        <Activity className="h-8 w-8 text-muted-foreground shrink-0" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Overall Health Score
-          </p>
-          <p className="text-sm text-muted-foreground mt-0.5">{summary}</p>
-        </div>
-        <span className={`text-5xl font-bold tabular-nums shrink-0 ${scoreColor}`}>
-          {Math.round(score)}
-        </span>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ── Real-data dashboard ───────────────────────────────────────────────────────
-
-interface RealDataDashboardProps {
-  reportData: MedicalData;
-  percentiles: PercentileResponse | null;
-}
-
-function RealDataDashboard({ reportData, percentiles }: RealDataDashboardProps) {
-  return (
-    <div className="space-y-6">
-      {percentiles && (
-        <HealthScoreCard
-          score={percentiles.overall_health_score}
-          summary={percentiles.summary}
-        />
-      )}
-
-      <PatientCard patient={reportData.patientInfo} />
-
-      {reportData.latestResults.length > 0 ? (
-        <div>
-          <h2 className="text-base font-semibold text-foreground mb-4">Lab Results</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {reportData.latestResults.map((result: LabResult) => (
-              <TestResultCard key={result.id} result={result} />
-            ))}
-          </div>
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground text-sm">
-            No lab results were extracted from this report.
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
+import { MedicalData } from '@/types/medical';
+import { Upload, FileText, Stethoscope, LogOut } from 'lucide-react';
 
 // ── Navigation bar ────────────────────────────────────────────────────────────
 
@@ -179,16 +102,38 @@ const Dashboard = () => {
   const { user } = useAuth();
 
   const locationState = location.state as LocationState | null;
-  const reportData = locationState?.reportData ?? null;
-  const isUsingMockData = reportData === null;
+  const justUploaded = locationState?.reportData ?? null;
 
+  const [fetchedReport, setFetchedReport] = useState<MedicalData | null>(null);
+  const [isLoadingLatest, setIsLoadingLatest] = useState(false);
   const [percentiles, setPercentiles] = useState<PercentileResponse | null>(null);
+
+  // Logged-in users always see their own latest report, never the bundled
+  // demo data — fetch it whenever we land here without having just
+  // uploaded something (e.g. after a fresh login, or navigating here
+  // directly). Anonymous visitors still see the demo for a quick look.
+  useEffect(() => {
+    if (!user || justUploaded) return;
+    setIsLoadingLatest(true);
+    apiService
+      .getReports()
+      .then((reports) => {
+        if (reports.length === 0) return undefined;
+        return apiService.getReport(reports[0].id);
+      })
+      .then((report) => setFetchedReport(report ?? null))
+      .catch((err) => console.warn('Failed to fetch latest report:', err))
+      .finally(() => setIsLoadingLatest(false));
+  }, [user, justUploaded]);
+
+  const activeData = justUploaded ?? fetchedReport;
+  const isUsingMockData = !user && activeData === null;
 
   // Fetch percentile enrichment for real data
   useEffect(() => {
-    if (!reportData || reportData.latestResults.length === 0) return;
+    if (!activeData || activeData.latestResults.length === 0) return;
 
-    const inputs = reportData.latestResults.map((r: LabResult) => ({
+    const inputs = activeData.latestResults.map((r) => ({
       testName: r.testName,
       value: r.value,
     }));
@@ -200,7 +145,7 @@ const Dashboard = () => {
         // Percentile enrichment is non-critical — continue without it
         console.warn('Percentile fetch failed:', err);
       });
-  }, [reportData]);
+  }, [activeData]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -219,17 +164,43 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Main content
-          For mock data: MedicalDashboard manages its own padding/layout.
-          For real data: we provide our own padded container. */}
+      {/* Main content — MedicalDashboard manages its own padding/layout for
+          both demo and real data; it falls back to bundled mock data only
+          when called with no props (anonymous visitor, nothing to show). */}
       {isUsingMockData ? (
         <MedicalDashboard />
-      ) : (
+      ) : isLoadingLatest ? (
+        <div className="p-12 text-center text-muted-foreground text-sm">Loading your reports…</div>
+      ) : !activeData ? (
         <div className="p-4 md:p-6">
           <div className="max-w-7xl mx-auto">
-            <RealDataDashboard reportData={reportData} percentiles={percentiles} />
+            <Card>
+              <CardContent className="py-16 text-center space-y-4">
+                <p className="text-muted-foreground text-sm">You haven't uploaded any reports yet.</p>
+                <Button onClick={() => navigate('/upload')}>Upload Your First Report</Button>
+              </CardContent>
+            </Card>
           </div>
         </div>
+      ) : activeData.latestResults.length === 0 ? (
+        <div className="p-4 md:p-6">
+          <div className="max-w-7xl mx-auto space-y-6">
+            <PatientCard patient={activeData.patientInfo} />
+            <Card>
+              <CardContent className="py-12 text-center text-muted-foreground text-sm">
+                No lab results were extracted from this report.
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      ) : (
+        <MedicalDashboard
+          patientInfo={activeData.patientInfo}
+          latestResults={activeData.latestResults}
+          testCategories={activeData.testCategories}
+          healthScore={percentiles?.overall_health_score}
+          healthSummary={percentiles?.summary}
+        />
       )}
     </div>
   );

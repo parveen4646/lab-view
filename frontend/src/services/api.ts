@@ -167,6 +167,16 @@ class ApiService {
     return result.data;
   }
 
+  // GET /api/reports/{id} returns extra DB fields alongside formatted_data —
+  // formatted_data is the exact MedicalData shape saved at upload time, so
+  // that's the only part the dashboard needs.
+  async getReport(id: string): Promise<MedicalData> {
+    const result = await this.makeRequest<{ success: boolean; data: { formatted_data: MedicalData } }>(
+      `/api/reports/${id}`,
+    );
+    return result.data.formatted_data;
+  }
+
   // ── Analytics endpoint (flat response) ─────────────────────────────────────
 
   async getPercentiles(
@@ -279,6 +289,7 @@ export const {
   loginWithGoogle,
   getMe,
   getReports,
+  getReport,
   getPercentiles,
   getHealth,
   getStatus,

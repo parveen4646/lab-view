@@ -1,17 +1,56 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent } from '@/components/ui/card';
 import { PatientCard } from './PatientCard';
+import { HealthScoreCard } from './HealthScoreCard';
 import { SummaryStats } from './SummaryStats';
 import { CategoryOverview } from './CategoryOverview';
 import { TestResultCard } from './TestResultCard';
 import { TrendChart } from './TrendChart';
-import { patientInfo, latestResults, testCategories, trendData } from '@/data/mockLabData';
+import {
+  patientInfo as mockPatientInfo,
+  latestResults as mockLatestResults,
+  testCategories as mockTestCategories,
+  trendData as mockTrendData,
+} from '@/data/mockLabData';
+import { PatientInfo, LabResult, TestCategory, TrendData } from '@/types/medical';
 import { Stethoscope, BarChart3, TrendingUp, FileText } from 'lucide-react';
 
-export const MedicalDashboard = () => {
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+function NoTrendHistory() {
+  return (
+    <Card>
+      <CardContent className="py-12 text-center text-muted-foreground text-sm">
+        Not enough history yet — trends build up as you upload more reports over time.
+      </CardContent>
+    </Card>
+  );
+}
 
-  const filteredResults = selectedCategory 
+interface MedicalDashboardProps {
+  patientInfo?: PatientInfo;
+  latestResults?: LabResult[];
+  testCategories?: TestCategory[];
+  // Omitted (vs. an empty array) means "no real trend history yet" — the
+  // Trends tab shows an honest placeholder instead of charts. Only the
+  // bundled demo data has real trend series to chart.
+  trendData?: Record<string, TrendData[]>;
+  healthScore?: number | null;
+  healthSummary?: string;
+}
+
+export const MedicalDashboard = ({
+  patientInfo = mockPatientInfo,
+  latestResults = mockLatestResults,
+  testCategories = mockTestCategories,
+  trendData,
+  healthScore,
+  healthSummary,
+}: MedicalDashboardProps = {}) => {
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const isDemoData = trendData === undefined && latestResults === mockLatestResults;
+  const charts = trendData ?? (isDemoData ? mockTrendData : undefined);
+
+  const filteredResults = selectedCategory
     ? latestResults.filter(result => result.category === selectedCategory)
     : latestResults;
 
@@ -28,6 +67,10 @@ export const MedicalDashboard = () => {
             <p className="text-muted-foreground">Comprehensive health monitoring dashboard</p>
           </div>
         </div>
+
+        {healthScore != null && (
+          <HealthScoreCard score={healthScore} summary={healthSummary ?? ''} />
+        )}
 
         {/* Patient Information */}
         <PatientCard patient={patientInfo} />
@@ -73,12 +116,16 @@ export const MedicalDashboard = () => {
               
               <div className="space-y-4">
                 <h3 className="text-xl font-semibold">Recent Trends</h3>
-                <TrendChart 
-                  data={trendData.cholesterol} 
-                  title="Total Cholesterol" 
-                  unit="mg/dL"
-                  referenceRange={{ min: 100, max: 200 }}
-                />
+                {charts ? (
+                  <TrendChart
+                    data={charts.cholesterol}
+                    title="Total Cholesterol"
+                    unit="mg/dL"
+                    referenceRange={{ min: 100, max: 200 }}
+                  />
+                ) : (
+                  <NoTrendHistory />
+                )}
               </div>
             </div>
           </TabsContent>
@@ -102,33 +149,37 @@ export const MedicalDashboard = () => {
           {/* Trends Tab */}
           <TabsContent value="trends" className="space-y-6">
             <h3 className="text-xl font-semibold">Test Trends Over Time</h3>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <TrendChart 
-                data={trendData.cholesterol} 
-                title="Total Cholesterol" 
-                unit="mg/dL"
-                referenceRange={{ min: 100, max: 200 }}
-              />
-              <TrendChart 
-                data={trendData.hemoglobin} 
-                title="Hemoglobin" 
-                unit="g/dL"
-                referenceRange={{ min: 12, max: 15.5 }}
-              />
-              <TrendChart 
-                data={trendData.glucose} 
-                title="Glucose" 
-                unit="mg/dL"
-                referenceRange={{ min: 70, max: 100 }}
-              />
-              <TrendChart 
-                data={trendData.creatinine} 
-                title="Creatinine" 
-                unit="mg/dL"
-                referenceRange={{ min: 0.6, max: 1.1 }}
-              />
-            </div>
+
+            {charts ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <TrendChart
+                  data={charts.cholesterol}
+                  title="Total Cholesterol"
+                  unit="mg/dL"
+                  referenceRange={{ min: 100, max: 200 }}
+                />
+                <TrendChart
+                  data={charts.hemoglobin}
+                  title="Hemoglobin"
+                  unit="g/dL"
+                  referenceRange={{ min: 12, max: 15.5 }}
+                />
+                <TrendChart
+                  data={charts.glucose}
+                  title="Glucose"
+                  unit="mg/dL"
+                  referenceRange={{ min: 70, max: 100 }}
+                />
+                <TrendChart
+                  data={charts.creatinine}
+                  title="Creatinine"
+                  unit="mg/dL"
+                  referenceRange={{ min: 0.6, max: 1.1 }}
+                />
+              </div>
+            ) : (
+              <NoTrendHistory />
+            )}
           </TabsContent>
 
           {/* Categories Tab */}
