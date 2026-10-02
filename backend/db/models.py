@@ -24,6 +24,7 @@ class User(Base):
     full_name: Mapped[Optional[str]] = mapped_column(String(255))
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     google_sub: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    neon_sub: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -65,6 +66,7 @@ class LabResult(Base):
     ref_max: Mapped[Optional[float]] = mapped_column(Float)
     status: Mapped[Optional[str]] = mapped_column(String(20))
     category: Mapped[Optional[str]] = mapped_column(String(50))
+    canonical_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     test_date: Mapped[Optional[str]] = mapped_column(String(20))
     notes: Mapped[Optional[str]] = mapped_column(Text)
 

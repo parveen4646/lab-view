@@ -43,11 +43,24 @@ export interface PercentileResponse {
   summary: string;
 }
 
+export interface QASource {
+  source: string;
+  corpus: string;
+  relevance: number;
+}
+
+export interface QAResponse {
+  answer: string;
+  sources: QASource[];
+  model_used: string;
+}
+
 // ── ApiService class ──────────────────────────────────────────────────────────
 
 class ApiService {
   private baseUrl: string;
   private token: string | null = null;
+  private tokenGetter: (() => Promise<string | null>) | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
@@ -57,37 +70,53 @@ class ApiService {
     this.token = token;
   }
 
-  /**
-   * Core fetch wrapper.
-   * - Attaches Authorization header when a token is set.
-   * - Skips Content-Type for FormData (browser sets it with the multipart boundary).
-   * - On non-2xx, parses the error body and throws with the backend's message.
-   */
+  setTokenGetter(getter: (() => Promise<string | null>) | null): void {
+    this.tokenGetter = getter;
+  }
+
+  private async resolveToken(): Promise<string | null> {
+    if (this.tokenGetter) return this.tokenGetter();
+    return this.token;
+  }
+
   private async makeRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
 
     const existingHeaders = (options.headers as Record<string, string>) ?? {};
     const headers: Record<string, string> = { ...existingHeaders };
 
-    // Don't override Content-Type when the caller already set it,
-    // and never set it for FormData bodies (browser owns that header).
     if (!(options.body instanceof FormData) && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
 
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+    const token = await this.resolveToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
 
     try {
       const response = await fetch(url, { ...options, headers });
 
       if (!response.ok) {
+        // On 401, try once more with a freshly fetched token before giving up.
+        if (response.status === 401 && token && this.tokenGetter) {
+          const freshToken = await this.tokenGetter();
+          if (freshToken && freshToken !== token) {
+            this.token = freshToken;
+            const retryHeaders = { ...headers, Authorization: `Bearer ${freshToken}` };
+            const retryResponse = await fetch(url, { ...options, headers: retryHeaders });
+            if (retryResponse.ok) return retryResponse.json() as Promise<T>;
+          }
+          this.token = null;
+          window.location.href = '/login';
+        } else if (response.status === 401 && token) {
+          this.token = null;
+          window.location.href = '/login';
+        }
+
         let errorMessage = `HTTP error ${response.status}`;
         try {
           const errorData = await response.json();
-          // Backend wraps HTTPException detail in { "error": "..." }
-          // FastAPI 422 validation errors use { "detail": [...] }
           errorMessage =
             errorData.error ||
             (typeof errorData.detail === 'string' ? errorData.detail : null) ||
@@ -95,24 +124,6 @@ class ApiService {
         } catch {
           // JSON parse failed; use the generic message
         }
-
-        // 401 with a token attached means the token was rejected (expired or
-        // invalid) — a request made with no token can't hit this branch,
-        // since the backend's optional-auth endpoints just treat that as
-        // anonymous rather than failing. Clear the stale session and force
-        // a fresh app load so every component re-reads the (now-empty) auth
-        // state instead of continuing to act as if still logged in.
-        if (response.status === 401 && this.token) {
-          try {
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('auth_user');
-          } catch {
-            // localStorage may be unavailable
-          }
-          this.token = null;
-          window.location.href = '/login';
-        }
-
         throw new Error(errorMessage);
       }
 
@@ -231,6 +242,15 @@ class ApiService {
     return result.data;
   }
 
+  // ── Q&A (RAG-grounded chat) ─────────────────────────────────────────────────
+
+  async askQuestion(question: string, reportId?: string): Promise<QAResponse> {
+    return this.makeRequest<QAResponse>('/api/qa/ask', {
+      method: 'POST',
+      body: JSON.stringify({ question, report_id: reportId ?? null }),
+    });
+  }
+
   // ── Available models ────────────────────────────────────────────────────────
 
   async getAvailableModels(): Promise<{ current_model: string; available_models: string[] }> {
@@ -284,6 +304,7 @@ export const apiService = new ApiService();
 // Named convenience exports (same surface as before, plus new methods)
 export const {
   setToken,
+  setTokenGetter,
   register,
   loginUser,
   loginWithGoogle,
@@ -291,6 +312,7 @@ export const {
   getReports,
   getReport,
   getPercentiles,
+  askQuestion,
   getHealth,
   getStatus,
   uploadPDF,

@@ -37,6 +37,12 @@ class Config:
     # APIs & Services → Credentials → OAuth client ID → Web application.
     GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 
+    # Neon Auth — managed Better Auth service (https://neon.tech/docs/neon-auth)
+    # Auth URL format: https://<endpoint>.neonauth.<region>.aws.neon.tech/<dbname>/auth
+    NEON_AUTH_URL = os.getenv("NEON_AUTH_URL", "")
+    # JWKS URL defaults to <NEON_AUTH_URL>/.well-known/jwks.json when blank.
+    NEON_AUTH_JWKS_URL = os.getenv("NEON_AUTH_JWKS_URL", "")
+
     # LLM providers (fallback chain: Groq → Gemini → DeepSeek → Claude)
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
