@@ -7,12 +7,6 @@ import { SummaryStats } from './SummaryStats';
 import { CategoryOverview } from './CategoryOverview';
 import { TestResultCard } from './TestResultCard';
 import { TrendChart } from './TrendChart';
-import {
-  patientInfo as mockPatientInfo,
-  latestResults as mockLatestResults,
-  testCategories as mockTestCategories,
-  trendData as mockTrendData,
-} from '@/data/mockLabData';
 import { PatientInfo, LabResult, TestCategory, TrendData } from '@/types/medical';
 import { Stethoscope, BarChart3, TrendingUp, FileText } from 'lucide-react';
 
@@ -27,28 +21,26 @@ function NoTrendHistory() {
 }
 
 interface MedicalDashboardProps {
-  patientInfo?: PatientInfo;
-  latestResults?: LabResult[];
-  testCategories?: TestCategory[];
+  patientInfo: PatientInfo;
+  latestResults: LabResult[];
+  testCategories: TestCategory[];
   // Omitted (vs. an empty array) means "no real trend history yet" — the
-  // Trends tab shows an honest placeholder instead of charts. Only the
-  // bundled demo data has real trend series to chart.
+  // Trends tab shows an honest placeholder instead of charts.
   trendData?: Record<string, TrendData[]>;
   healthScore?: number | null;
   healthSummary?: string;
 }
 
 export const MedicalDashboard = ({
-  patientInfo = mockPatientInfo,
-  latestResults = mockLatestResults,
-  testCategories = mockTestCategories,
+  patientInfo,
+  latestResults,
+  testCategories,
   trendData,
   healthScore,
   healthSummary,
-}: MedicalDashboardProps = {}) => {
+}: MedicalDashboardProps) => {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const isDemoData = trendData === undefined && latestResults === mockLatestResults;
-  const charts = trendData ?? (isDemoData ? mockTrendData : undefined);
+  const charts = trendData;
 
   const filteredResults = selectedCategory
     ? latestResults.filter(result => result.category === selectedCategory)

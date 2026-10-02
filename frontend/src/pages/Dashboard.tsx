@@ -130,7 +130,7 @@ const Dashboard = () => {
   }, [user, justUploaded]);
 
   const activeData = justUploaded ?? fetchedReport;
-  const isUsingMockData = !user && activeData === null;
+  const showIntro = !user && activeData === null;
 
   // Fetch percentile enrichment for real data
   useEffect(() => {
@@ -155,23 +155,35 @@ const Dashboard = () => {
       {/* Navigation */}
       <NavBar user={user} />
 
-      {/* Demo data banner */}
-      {isUsingMockData && (
-        <div className="border-b bg-muted/40">
-          <div className="max-w-7xl mx-auto px-4 md:px-6 py-2.5 flex items-center justify-between gap-3 text-sm text-muted-foreground">
-            <span>Viewing demo data — upload your own lab report to see your results.</span>
-            <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" onClick={() => navigate('/upload')}>
-              Upload PDF
-            </Button>
+      {/* Main content */}
+      {showIntro ? (
+        <div className="p-4 md:p-6">
+          <div className="max-w-xl mx-auto pt-20 text-center space-y-5">
+            <div className="inline-flex items-center justify-center w-14 h-14 bg-foreground rounded-full">
+              <Stethoscope className="w-7 h-7 text-background" />
+            </div>
+            <h1 className="text-3xl font-semibold text-foreground">MedLab</h1>
+            <p className="text-muted-foreground">
+              Upload a lab report PDF and get an instant, plain-language breakdown of your
+              results — with population percentile context and an AI you can ask follow-up
+              questions.
+            </p>
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <Button
+                size="lg"
+                className="bg-foreground text-background hover:bg-foreground/90 px-6"
+                onClick={() => navigate('/upload')}
+              >
+                Upload a Report
+              </Button>
+              <Link to="/login">
+                <Button size="lg" variant="outline" className="px-6">
+                  Sign In
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
-      )}
-
-      {/* Main content — MedicalDashboard manages its own padding/layout for
-          both demo and real data; it falls back to bundled mock data only
-          when called with no props (anonymous visitor, nothing to show). */}
-      {isUsingMockData ? (
-        <MedicalDashboard />
       ) : isLoadingLatest ? (
         <div className="p-12 text-center text-muted-foreground text-sm">Loading your reports…</div>
       ) : !activeData ? (
