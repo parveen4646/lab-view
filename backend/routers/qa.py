@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from qdrant_client import models
 from sqlalchemy.orm import Session
 
-from auth.jwt import decode_token
+from auth.dependencies import _resolve_user
 from config import Config
 from db.database import get_db
 from db.models import Report, User
@@ -41,8 +41,7 @@ def _optional_user(
     if not credentials:
         return None
     try:
-        uid = decode_token(credentials.credentials)
-        return db.query(User).filter(User.id == uid, User.is_active == True).first()  # noqa: E712
+        return _resolve_user(credentials.credentials, db)
     except Exception:
         return None
 

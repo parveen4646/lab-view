@@ -224,6 +224,7 @@ def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_
                 ref_max=ref.get("max"),
                 status=r.get("status"),
                 category=r.get("category"),
+                canonical_name=r.get("canonicalName"),
                 test_date=r.get("date"),
             ))
 
@@ -267,10 +268,8 @@ def _optional_user(
     if not credentials:
         return None, db
     try:
-        from auth.jwt import decode_token
-        from db.models import User as UserModel
-        uid = decode_token(credentials.credentials)
-        user = db.query(UserModel).filter(UserModel.id == uid, UserModel.is_active == True).first()
+        from auth.dependencies import _resolve_user
+        user = _resolve_user(credentials.credentials, db)
         return user, db
     except Exception:
         return None, db

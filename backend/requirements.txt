@@ -11,6 +11,7 @@ sqlalchemy==2.0.36
 alembic==1.13.3
 psycopg2-binary==2.9.10
 python-jose[cryptography]==3.3.0
+PyJWT[crypto]==2.10.1
 bcrypt==5.0.0
 google-auth==2.36.0
 scipy==1.14.1

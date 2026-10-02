@@ -1,4 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+/**
+ * Login page — wires the existing email/password UI to Neon Auth.
+ *
+ * What changed vs. the previous version:
+ *  • Email/password forms call authClient.signIn.email() / signUp.email()
+ *    instead of our own /auth/login and /auth/register endpoints.
+ *  • The Google "Sign in with Google" button calls authClient.signIn.social()
+ *    which triggers Neon Auth's managed Google OAuth redirect (no Google
+ *    Identity Services script required).
+ *  • After sign-in succeeds, authClient.useSession() in AuthContext updates
+ *    automatically — no manual auth.login() call needed here.
+ */
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,10 +19,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Stethoscope, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { useAuth } from '@/contexts/AuthContext';
-import { apiService } from '@/services/api';
-
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+import { authClient } from '@/lib/neon';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -22,84 +31,28 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const auth = useAuth();
-  const googleButtonRef = useRef<HTMLDivElement>(null);
 
-  const handleGoogleCredential = async (response: { credential: string }) => {
-    setIsLoading(true);
+  const handleGoogleSignIn = async () => {
     try {
-      const { access_token } = await apiService.loginWithGoogle(response.credential);
-      apiService.setToken(access_token);
-      const user = await apiService.getMe();
-      auth.login(access_token, { id: user.id, email: user.email, full_name: user.full_name });
-      toast({ title: 'Login Successful', description: 'Welcome to MedLab Dashboard' });
-      navigate('/');
-    } catch (error) {
-      toast({
-        title: 'Google Sign-In Failed',
-        description: apiService.handleApiError(error),
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoading(false);
+      // Redirects to Google → Neon Auth handles callback → returns to callbackURL.
+      await authClient.signIn.social({ provider: 'google', callbackURL: `${window.location.origin}/` });
+    } catch {
+      toast({ title: 'Google Sign-In Failed', description: 'Could not start Google sign-in.', variant: 'destructive' });
     }
   };
-
-  // Google Identity Services attaches itself to window — no npm package/types
-  // for it, hence `any`. Loaded on demand here (only /login needs it) rather
-  // than as a static <script> tag, so we can reliably wait for it via onload
-  // instead of racing an async script tag against this effect.
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
-
-    const initialize = () => {
-      const google = (window as any).google;
-      if (!google || !googleButtonRef.current) return;
-      google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: handleGoogleCredential,
-      });
-      google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: 'outline',
-        size: 'large',
-        width: 296,
-      });
-    };
-
-    if ((window as any).google) {
-      initialize();
-      return;
-    }
-
-    const existing = document.getElementById('google-identity-script');
-    if (existing) {
-      existing.addEventListener('load', initialize);
-      return () => existing.removeEventListener('load', initialize);
-    }
-
-    const script = document.createElement('script');
-    script.id = 'google-identity-script';
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.onload = initialize;
-    document.body.appendChild(script);
-  }, []);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const { access_token } = await apiService.loginUser(email, password);
-      // Set token on the service BEFORE calling getMe so it attaches the Bearer header.
-      apiService.setToken(access_token);
-      const user = await apiService.getMe();
-      auth.login(access_token, { id: user.id, email: user.email, full_name: user.full_name });
+      const result = await authClient.signIn.email({ email, password });
+      if ((result as any)?.error) throw new Error((result as any).error.message ?? 'Sign-in failed');
       toast({ title: 'Login Successful', description: 'Welcome back to MedLab Dashboard' });
       navigate('/');
     } catch (error) {
       toast({
         title: 'Login Failed',
-        description: apiService.handleApiError(error),
+        description: error instanceof Error ? error.message : 'Invalid credentials',
         variant: 'destructive',
       });
     } finally {
@@ -111,27 +64,24 @@ const Login = () => {
     e.preventDefault();
 
     if (password !== confirmPassword) {
-      toast({
-        title: 'Password Mismatch',
-        description: 'Passwords do not match',
-        variant: 'destructive',
-      });
+      toast({ title: 'Password Mismatch', description: 'Passwords do not match', variant: 'destructive' });
+      return;
+    }
+    if (password.length < 8) {
+      toast({ title: 'Weak Password', description: 'Password must be at least 8 characters', variant: 'destructive' });
       return;
     }
 
     setIsLoading(true);
     try {
-      const { access_token } = await apiService.register(email, password, fullName || undefined);
-      // Set token on the service BEFORE calling getMe so it attaches the Bearer header.
-      apiService.setToken(access_token);
-      const user = await apiService.getMe();
-      auth.login(access_token, { id: user.id, email: user.email, full_name: user.full_name });
-      toast({ title: 'Account Created', description: 'Welcome to MedLab Dashboard' });
+      const result = await authClient.signUp.email({ email, password, name: fullName || email });
+      if ((result as any)?.error) throw new Error((result as any).error.message ?? 'Registration failed');
+      toast({ title: 'Account Created', description: 'Check your inbox to verify your email if required, then sign in.' });
       navigate('/');
     } catch (error) {
       toast({
         title: 'Registration Failed',
-        description: apiService.handleApiError(error),
+        description: error instanceof Error ? error.message : 'Could not create account',
         variant: 'destructive',
       });
     } finally {
@@ -155,19 +105,33 @@ const Login = () => {
         </CardHeader>
 
         <CardContent className="px-8 pb-8">
-          {GOOGLE_CLIENT_ID && (
-            <div className="mb-6 space-y-4">
-              <div ref={googleButtonRef} className="flex justify-center" />
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center text-xs">
-                  <span className="bg-card px-2 text-muted-foreground">or continue with email</span>
-                </div>
+          {/* Google Sign-In — handled entirely by Neon Auth (no GIS script) */}
+          <div className="mb-6 space-y-4">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full h-12 gap-3"
+              onClick={handleGoogleSignIn}
+              disabled={isLoading}
+            >
+              {/* Google logo SVG */}
+              <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              Continue with Google
+            </Button>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="bg-card px-2 text-muted-foreground">or continue with email</span>
               </div>
             </div>
-          )}
+          </div>
 
           <Tabs defaultValue="signin" className="w-full">
             <TabsList className="grid w-full grid-cols-2 mb-8 bg-muted h-10">
@@ -178,9 +142,7 @@ const Login = () => {
             <TabsContent value="signin">
               <form onSubmit={handleSignIn} className="space-y-6">
                 <div className="space-y-2">
-                  <Label htmlFor="signin-email" className="text-sm text-foreground">
-                    Email
-                  </Label>
+                  <Label htmlFor="signin-email" className="text-sm text-foreground">Email</Label>
                   <Input
                     id="signin-email"
                     type="email"
@@ -193,9 +155,7 @@ const Login = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="signin-password" className="text-sm text-foreground">
-                    Password
-                  </Label>
+                  <Label htmlFor="signin-password" className="text-sm text-foreground">Password</Label>
                   <div className="relative">
                     <Input
                       id="signin-password"
@@ -207,17 +167,11 @@ const Login = () => {
                       required
                     />
                     <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
+                      type="button" variant="ghost" size="sm"
                       className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
                       onClick={() => setShowPassword(!showPassword)}
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
-                      )}
+                      {showPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
                     </Button>
                   </div>
                 </div>
@@ -235,9 +189,7 @@ const Login = () => {
             <TabsContent value="signup">
               <form onSubmit={handleSignUp} className="space-y-6">
                 <div className="space-y-2">
-                  <Label htmlFor="signup-name" className="text-sm text-foreground">
-                    Full Name
-                  </Label>
+                  <Label htmlFor="signup-name" className="text-sm text-foreground">Full Name</Label>
                   <Input
                     id="signup-name"
                     type="text"
@@ -249,9 +201,7 @@ const Login = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="signup-email" className="text-sm text-foreground">
-                    Email
-                  </Label>
+                  <Label htmlFor="signup-email" className="text-sm text-foreground">Email</Label>
                   <Input
                     id="signup-email"
                     type="email"
@@ -264,9 +214,7 @@ const Login = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="signup-password" className="text-sm text-foreground">
-                    Password
-                  </Label>
+                  <Label htmlFor="signup-password" className="text-sm text-foreground">Password</Label>
                   <div className="relative">
                     <Input
                       id="signup-password"
@@ -278,25 +226,17 @@ const Login = () => {
                       required
                     />
                     <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
+                      type="button" variant="ghost" size="sm"
                       className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
                       onClick={() => setShowPassword(!showPassword)}
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
-                      )}
+                      {showPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
                     </Button>
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="confirm-password" className="text-sm text-foreground">
-                    Confirm Password
-                  </Label>
+                  <Label htmlFor="confirm-password" className="text-sm text-foreground">Confirm Password</Label>
                   <div className="relative">
                     <Input
                       id="confirm-password"
@@ -308,17 +248,11 @@ const Login = () => {
                       required
                     />
                     <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
+                      type="button" variant="ghost" size="sm"
                       className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
                       onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                     >
-                      {showConfirmPassword ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
-                      )}
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4 text-muted-foreground" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
                     </Button>
                   </div>
                 </div>

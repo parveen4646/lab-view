@@ -25,13 +25,14 @@ const qualityColor = (q: string | null) => {
 };
 
 const Reports = () => {
-  const { user, token } = useAuth();
+  const { user, token, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!token) {
       navigate('/login');
       return;
@@ -41,7 +42,7 @@ const Reports = () => {
       .then((data) => setReports(data))
       .catch((e) => setError(e.message ?? 'Failed to load reports'))
       .finally(() => setLoading(false));
-  }, [token, navigate]);
+  }, [token, authLoading, navigate]);
 
   const handleDelete = async (id: string) => {
     try {
