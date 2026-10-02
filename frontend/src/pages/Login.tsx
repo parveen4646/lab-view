@@ -34,10 +34,16 @@ const Login = () => {
 
   const handleGoogleSignIn = async () => {
     try {
-      // Redirects to Google → Neon Auth handles callback → returns to callbackURL.
-      await authClient.signIn.social({ provider: 'google', callbackURL: `${window.location.origin}/` });
-    } catch {
-      toast({ title: 'Google Sign-In Failed', description: 'Could not start Google sign-in.', variant: 'destructive' });
+      const result = await authClient.signIn.social({ provider: 'google', callbackURL: `${window.location.origin}/` });
+      if ((result as any)?.error) {
+        const msg = (result as any).error?.message ?? JSON.stringify((result as any).error);
+        console.error('Google sign-in error:', (result as any).error);
+        toast({ title: 'Google Sign-In Failed', description: msg, variant: 'destructive' });
+      }
+    } catch (err) {
+      console.error('Google sign-in threw:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ title: 'Google Sign-In Failed', description: msg, variant: 'destructive' });
     }
   };
 
