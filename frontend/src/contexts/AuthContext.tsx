@@ -43,7 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (neonSession.data) {
       apiService.setTokenGetter(async () => {
         try {
-          return (await authClient.getJWTToken?.()) ?? neonSession.data?.session?.token ?? null;
+          const { data } = await authClient.token();
+          return data?.token ?? neonSession.data?.session?.token ?? null;
         } catch {
           return neonSession.data?.session?.token ?? null;
         }
