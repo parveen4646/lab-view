@@ -7,6 +7,7 @@ import tiktoken
 from pydantic import BaseModel
 
 from services.llm_router import build_router, LLMRouter
+from services.population_stats import CANONICAL_TEST_NAMES, resolve_canonical_name
 from utils.medical_limits import derive_status
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,14 @@ class _SlimResult(BaseModel):
     min: Optional[float] = None
     max: Optional[float] = None
     category: str
+    # Deliberately Optional[str], NOT a Literal/Enum restricted to
+    # CANONICAL_TEST_NAMES: instructor retries the ENTIRE structured-output
+    # call on any validation failure, and a single bad enum value must never
+    # be able to blow up a whole extraction's rate-limit budget via a retry
+    # (see _MAX_INPUT_TOKENS/_MAX_OUTPUT_TOKENS — Groq free tier, 8000 TPM).
+    # Validated against the known vocabulary in _expand() instead of at the
+    # schema level.
+    canonicalName: Optional[str] = None
 
 
 class _SlimExtraction(BaseModel):
@@ -68,7 +77,11 @@ TABLE DATA:
 Rules:
 - Extract every lab test result with its value, unit, and reference range (min/max)
 - Categorize each test into one of: blood, lipid, liver, kidney, metabolic
-- Use null for missing patient details; never fabricate numeric values\
+- Use null for missing patient details; never fabricate numeric values
+- For canonicalName: if a test's name clearly matches one of these common biomarker \
+names: {canonical_names}, then set canonicalName to that exact name (verbatim, \
+lowercase, copied from this list). Otherwise set canonicalName to null. Never invent \
+a name that is not in this list\
 """
 
 
@@ -84,11 +97,34 @@ class AnalysisResult:
 # and the reserved output budget together. Measured real cost: ~63 output
 # tokens/result (patientInfo + simplified per-result fields, no
 # testCategories) — a comprehensive ~56-result report needs ~3650 output
-# tokens. Fixed prompt/instructions overhead is ~350 tokens, so
-# input + overhead + output must stay under 8000:
-# 3000 + 350 + 4400 = 7750, leaving a ~250-token safety margin even in a
-# cold rate-limit window, with output sized for ~70 results of headroom.
-_MAX_INPUT_TOKENS = 3000
+# tokens. Fixed prompt/instructions overhead was ~350 tokens.
+#
+# Adding canonicalName (for cross-report test-name grouping) cost tokens in
+# two places, measured with _ENCODING.encode(...) directly:
+#   - the new prompt rule + injected ", ".join(CANONICAL_TEST_NAMES) vocab
+#     string (73 tokens for the current 24-name list) together add ~130
+#     tokens to the fixed prompt text (54 → 184 tokens for the rules block);
+#   - instructor (Mode.JSON) also injects the _SlimExtraction response_model
+#     schema into the request; the `instructor` package isn't installed in
+#     this dev venv so its exact wrapper text couldn't be inspected, but
+#     comparing the full nested schema's own JSON before/after canonicalName
+#     (json.dumps(_SlimExtraction.model_json_schema())) gives +29 tokens
+#     compact / +48 tokens pretty-printed (indent=2) — call it ~50 tokens,
+#     taking the conservative (larger) figure;
+#   - output side: one extra `"canonicalName": "<name>"` key costs ~8 tokens
+#     per result (43 → 51 tokens for a representative result object), so
+#     per-result output cost is now ~71 tokens, not ~63 — output headroom
+#     within the unchanged 4400-token reservation drops from ~70 results to
+#     ~62 results, still comfortably above the ~56-result reference report.
+#
+# Total added fixed overhead: ~130 + 50 = ~180 tokens (350 → ~530). To keep
+# input + overhead + output comfortably under 8000 with the original
+# ~250-token safety margin intact, _MAX_INPUT_TOKENS (not the output
+# budget — shrinking that caused real truncation bugs earlier) is lowered
+# from 3000 to 2800:
+# 2800 + 530 + 4400 = 7730, leaving a ~270-token safety margin even in a
+# cold rate-limit window — at least as large as the original ~250.
+_MAX_INPUT_TOKENS = 2800
 _MAX_OUTPUT_TOKENS = 4400
 
 
@@ -142,7 +178,10 @@ class ClaudeAnalyzer:
         text, input_truncated = _truncate_to_tokens(extracted_content.get("text", ""), _MAX_INPUT_TOKENS)
         tables = extracted_content.get("tables", [])
         tables_str = json.dumps(tables[:5], indent=2) if tables else "No tables detected"
-        return _EXTRACTION_PROMPT.format(text=text, tables=tables_str), input_truncated
+        prompt = _EXTRACTION_PROMPT.format(
+            text=text, tables=tables_str, canonical_names=", ".join(CANONICAL_TEST_NAMES)
+        )
+        return prompt, input_truncated
 
     @staticmethod
     def _expand(slim: _SlimExtraction) -> Dict[str, Any]:
@@ -166,6 +205,7 @@ class ClaudeAnalyzer:
                 "status": derive_status(r.value, r.min, r.max),
                 "date": last_date,
                 "category": r.category,
+                "canonicalName": ClaudeAnalyzer._resolve_canonical(r),
             }
             for i, r in enumerate(slim.latestResults)
         ]
@@ -174,6 +214,20 @@ class ClaudeAnalyzer:
             "latestResults": results,
             "testCategories": [],
         }
+
+    @staticmethod
+    def _resolve_canonical(r: "_SlimResult") -> Optional[str]:
+        """Canonical key precedence: deterministic resolver first (trusted),
+        then the LLM's own guess — but only if it's actually in the known
+        vocabulary, since the model can still hallucinate outside the list
+        despite prompt instructions (canonicalName is Optional[str], not an
+        enum, precisely so a bad value here never fails schema validation)."""
+        deterministic = resolve_canonical_name(r.testName)
+        if deterministic is not None:
+            return deterministic
+        if r.canonicalName in CANONICAL_TEST_NAMES:
+            return r.canonicalName
+        return None
 
     @staticmethod
     def _empty_result() -> Dict[str, Any]:

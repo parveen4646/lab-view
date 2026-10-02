@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { MedicalDashboard } from '@/components/medical/MedicalDashboard';
 import { PatientCard } from '@/components/medical/PatientCard';
+import { ChatWidget } from '@/components/medical/ChatWidget';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiService, PercentileResponse } from '@/services/api';
 import { MedicalData } from '@/types/medical';
@@ -105,6 +106,7 @@ const Dashboard = () => {
   const justUploaded = locationState?.reportData ?? null;
 
   const [fetchedReport, setFetchedReport] = useState<MedicalData | null>(null);
+  const [fetchedReportId, setFetchedReportId] = useState<string | null>(null);
   const [isLoadingLatest, setIsLoadingLatest] = useState(false);
   const [percentiles, setPercentiles] = useState<PercentileResponse | null>(null);
 
@@ -119,6 +121,7 @@ const Dashboard = () => {
       .getReports()
       .then((reports) => {
         if (reports.length === 0) return undefined;
+        setFetchedReportId(reports[0].id);
         return apiService.getReport(reports[0].id);
       })
       .then((report) => setFetchedReport(report ?? null))
@@ -202,6 +205,8 @@ const Dashboard = () => {
           healthSummary={percentiles?.summary}
         />
       )}
+
+      <ChatWidget reportId={fetchedReportId ?? undefined} />
     </div>
   );
 };

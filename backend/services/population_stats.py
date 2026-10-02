@@ -7,6 +7,7 @@ Scipy is optional: if unavailable, the CDF is computed via math.erf.
 """
 
 import math
+import re
 
 try:
     from scipy.stats import norm as _scipy_norm
@@ -166,7 +167,7 @@ _ALIASES: dict[str, list[str]] = {
     "ldl cholesterol":   ["ldl", "ldl-c", "low density lipoprotein"],
     "hdl cholesterol":   ["hdl", "hdl-c", "high density lipoprotein"],
     "triglycerides":     ["tg", "trigs", "triglyceride"],
-    "glucose":           ["blood glucose", "fasting glucose", "fbs", "fpg"],
+    "glucose":           ["blood glucose", "fasting glucose", "glucose fasting", "fbs", "fpg"],
     "hba1c":             ["a1c", "glycated hemoglobin", "glycohemoglobin", "hemoglobin a1c"],
     "creatinine":        ["serum creatinine", "cr", "cre"],
     "bun":               ["blood urea nitrogen", "urea nitrogen"],
@@ -192,6 +193,9 @@ for _canonical, _aliases in _ALIASES.items():
     # the canonical itself also resolves to itself
     _ALIAS_LOOKUP[_canonical] = _canonical
 
+# Public: every canonical biomarker key this module knows about.
+CANONICAL_TEST_NAMES: list[str] = list(POPULATION_STATS.keys())
+
 
 # ---------------------------------------------------------------------------
 # Interpretation helper
@@ -213,10 +217,56 @@ def _interpret(percentile_rank: float) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def _resolve(test_name: str) -> str | None:
-    """Return canonical POPULATION_STATS key for test_name, or None."""
-    key = test_name.strip().lower()
-    return _ALIAS_LOOKUP.get(key)
+_NOISE_SUFFIXES = (" count", " level", " levels")
+
+
+def resolve_canonical_name(test_name: str) -> str | None:
+    """Return canonical POPULATION_STATS key for test_name, or None.
+
+    Tries a small, fixed set of safe normalizations — never fuzzy or
+    subset/token-overlap matching — against the existing exact-match alias
+    lookup:
+      (a) the lowercased/whitespace-collapsed string itself,
+      (b) if it contains "(...)", the content inside the parentheses,
+      (c) the string with any parenthetical content removed,
+      (d) the string with one trailing noise suffix stripped (" count",
+          " level", " levels").
+
+    Deliberately does NOT do subset/token-overlap matching: that would fold
+    clinically distinct tests (e.g. "glucose tolerance test" or
+    "postprandial glucose") into the same bucket as plain fasting glucose,
+    which is wrong. Those must stay unresolved (return None) on purpose.
+    """
+    if not test_name:
+        return None
+
+    raw = test_name.strip()
+    base = " ".join(raw.lower().split())
+
+    candidates = [base]
+
+    paren_match = re.search(r"\(([^)]*)\)", raw)
+    if paren_match:
+        inside = " ".join(paren_match.group(1).lower().split())
+        candidates.append(inside)
+        without_parens = re.sub(r"\([^)]*\)", "", raw)
+        without_parens = " ".join(without_parens.lower().split())
+        candidates.append(without_parens)
+
+    for suffix in _NOISE_SUFFIXES:
+        if base.endswith(suffix):
+            candidates.append(base[: -len(suffix)])
+
+    for candidate in candidates:
+        canonical = _ALIAS_LOOKUP.get(candidate)
+        if canonical is not None:
+            return canonical
+    return None
+
+
+# Backwards-compatible internal alias — kept since this was previously a
+# "private" helper; _resolve == resolve_canonical_name.
+_resolve = resolve_canonical_name
 
 
 def get_percentile(test_name: str, value: float) -> dict | None:

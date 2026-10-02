@@ -67,7 +67,8 @@ class DataFormatter:
                     "referenceRange": result.get("referenceRange", {"min": 0, "max": 100}),
                     "status": result.get("status", "normal"),
                     "date": result.get("date", datetime.now().strftime("%Y-%m-%d")),
-                    "category": result.get("category", "blood")
+                    "category": result.get("category", "blood"),
+                    "canonicalName": result.get("canonicalName")
                 }
                 formatted_results.append(formatted_result)
             except Exception as e:
