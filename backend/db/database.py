@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
@@ -7,12 +8,29 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-_database_url = Config.DATABASE_URL
-if _database_url.startswith("postgresql://"):
-    # Bare "postgresql://" lets SQLAlchemy pick a driver, and it resolves to
-    # the psycopg (v3) dialect if that package is merely importable — we
-    # install psycopg2-binary, so pin the driver explicitly to match.
-    _database_url = "postgresql+psycopg2://" + _database_url[len("postgresql://"):]
+
+def _normalize_database_url(url: str) -> str:
+    if url.startswith("postgresql://"):
+        # Bare "postgresql://" lets SQLAlchemy pick a driver, and it resolves to
+        # the psycopg (v3) dialect if that package is merely importable — we
+        # install psycopg2-binary, so pin the driver explicitly to match.
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+
+    # psycopg2's bundled libpq doesn't recognize "channel_binding" (a SCRAM
+    # channel-binding parameter Neon's connection strings include by
+    # default) and fails every connection with "invalid channel_binding
+    # value" — strip it. sslmode=require already enforces an encrypted
+    # connection on its own.
+    parts = urlsplit(url)
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    filtered_pairs = [(k, v) for k, v in query_pairs if k != "channel_binding"]
+    if len(filtered_pairs) != len(query_pairs):
+        url = urlunsplit(parts._replace(query=urlencode(filtered_pairs)))
+
+    return url
+
+
+_database_url = _normalize_database_url(Config.DATABASE_URL)
 
 engine = create_engine(
     _database_url,
