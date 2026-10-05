@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import uuid
 from datetime import datetime
@@ -211,7 +212,8 @@ def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_
         db.flush()  # get report.id before committing
 
         if raw_text:
-            _index_report_for_rag(report.id, filename, raw_text)
+            test_date = (formatted.get("patientInfo") or {}).get("lastTestDate")
+            _index_report_for_rag(report.id, filename, raw_text, user_id=user_id, test_date=test_date)
 
         for r in analyzed.get("latestResults", []):
             ref = r.get("referenceRange") or {}
@@ -235,7 +237,22 @@ def _save_report_to_db(*, db, user_id, filename, eval_result, drop_count, model_
         logger.warning("DB save failed (non-fatal): %s", exc)
 
 
-def _index_report_for_rag(report_id: str, filename: str, raw_text: str) -> None:
+_YEAR_RE = re.compile(r"(19|20)\d{2}")
+
+
+def _extract_year(date_str: Optional[str]) -> Optional[int]:
+    """Pull a plausible 4-digit year out of whatever date string the LLM
+    extracted (format isn't guaranteed — could be ISO, "15-Mar-2019", etc).
+    Used to let Q&A filter a user's reports by year; None if nothing found."""
+    if not date_str:
+        return None
+    match = _YEAR_RE.search(date_str)
+    return int(match.group(0)) if match else None
+
+
+def _index_report_for_rag(
+    report_id: str, filename: str, raw_text: str, *, user_id: str, test_date: Optional[str] = None
+) -> None:
     """Chunk + embed + upsert this report's free text for the Q&A RAG pipeline. Non-fatal on failure."""
     try:
         from services.rag.chunker import chunk_text
@@ -244,9 +261,17 @@ def _index_report_for_rag(report_id: str, filename: str, raw_text: str) -> None:
         pieces = chunk_text(raw_text, chunk_tokens=400, overlap_tokens=60)
         if not pieces:
             return
+        year = _extract_year(test_date)
         chunks = [p.text for p in pieces]
         metadatas = [
-            {"corpus": "report", "source": filename, "report_id": report_id, "chunk_index": p.index}
+            {
+                "corpus": "report",
+                "source": filename,
+                "report_id": report_id,
+                "user_id": user_id,
+                "chunk_index": p.index,
+                **({"year": year} if year is not None else {}),
+            }
             for p in pieces
         ]
         upsert_chunks(chunks, metadatas)
