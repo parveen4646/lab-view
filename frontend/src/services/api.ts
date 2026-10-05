@@ -1,5 +1,6 @@
 // src/services/api.ts
 import { MedicalData, HealthStatus, SystemStatus } from '../types/medical';
+import { authClient } from '@/lib/neon';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -79,6 +80,21 @@ class ApiService {
     return this.token;
   }
 
+  // A 401 means the token is dead, but a hard redirect to /login alone
+  // isn't enough: if this was a Neon Auth session, its cookie is still
+  // valid, so Login's "already signed in -> bounce to /" effect would
+  // immediately bounce straight back here, forming a login<->home loop.
+  // Ending the Neon session first breaks that loop.
+  private async forceSignOutAndRedirect(): Promise<void> {
+    this.token = null;
+    try {
+      await authClient.signOut();
+    } catch {
+      // best-effort — still redirect even if sign-out itself fails
+    }
+    window.location.href = '/login';
+  }
+
   private async makeRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
 
@@ -107,11 +123,9 @@ class ApiService {
             const retryResponse = await fetch(url, { ...options, headers: retryHeaders });
             if (retryResponse.ok) return retryResponse.json() as Promise<T>;
           }
-          this.token = null;
-          window.location.href = '/login';
+          await this.forceSignOutAndRedirect();
         } else if (response.status === 401 && token) {
-          this.token = null;
-          window.location.href = '/login';
+          await this.forceSignOutAndRedirect();
         }
 
         let errorMessage = `HTTP error ${response.status}`;

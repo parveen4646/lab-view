@@ -100,23 +100,32 @@ interface LocationState {
 const Dashboard = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
 
   const locationState = location.state as LocationState | null;
   const justUploaded = locationState?.reportData ?? null;
 
   const [fetchedReport, setFetchedReport] = useState<MedicalData | null>(null);
   const [fetchedReportId, setFetchedReportId] = useState<string | null>(null);
-  const [isLoadingLatest, setIsLoadingLatest] = useState(false);
+  // Which user id the fetch below has finished settling for — not a plain
+  // boolean toggled inside the effect, so isLoadingLatest (derived below)
+  // is correct on the very first render user becomes available, with no
+  // one-frame gap where the "no reports yet" welcome screen flashes before
+  // the loading state has had a chance to turn on.
+  const [settledForUserId, setSettledForUserId] = useState<string | null>(null);
   const [percentiles, setPercentiles] = useState<PercentileResponse | null>(null);
 
   // Logged-in users always see their own latest report, never the bundled
   // demo data — fetch it whenever we land here without having just
   // uploaded something (e.g. after a fresh login, or navigating here
   // directly). Anonymous visitors still see the demo for a quick look.
+  // Keyed on user?.id (a stable primitive), not the user object itself —
+  // Better Auth's session object gets a new reference on every background
+  // refetch (e.g. on tab refocus) even when nothing actually changed, which
+  // would otherwise re-trigger this fetch and re-flash "Loading your
+  // reports…" every time the tab regains focus.
   useEffect(() => {
     if (!user || justUploaded) return;
-    setIsLoadingLatest(true);
     apiService
       .getReports()
       .then((reports) => {
@@ -126,11 +135,15 @@ const Dashboard = () => {
       })
       .then((report) => setFetchedReport(report ?? null))
       .catch((err) => console.warn('Failed to fetch latest report:', err))
-      .finally(() => setIsLoadingLatest(false));
-  }, [user, justUploaded]);
+      .finally(() => setSettledForUserId(user.id));
+  }, [user?.id, justUploaded]);
 
+  const isLoadingLatest = !!user && !justUploaded && settledForUserId !== user.id;
   const activeData = justUploaded ?? fetchedReport;
-  const showIntro = !user && activeData === null;
+  // Gated on !authLoading so a signed-in user never briefly sees the
+  // anonymous intro while the Neon session is still resolving (e.g. right
+  // after login, or on a hard refresh) before flipping to their dashboard.
+  const showIntro = !authLoading && !user && activeData === null;
 
   // Fetch percentile enrichment for real data
   useEffect(() => {
@@ -156,7 +169,9 @@ const Dashboard = () => {
       <NavBar user={user} />
 
       {/* Main content */}
-      {showIntro ? (
+      {authLoading ? (
+        <div className="p-12 text-center text-muted-foreground text-sm">Loading…</div>
+      ) : showIntro ? (
         <div className="p-4 md:p-6">
           <div className="max-w-xl mx-auto pt-20 text-center space-y-5">
             <div className="inline-flex items-center justify-center w-14 h-14 bg-foreground rounded-full">

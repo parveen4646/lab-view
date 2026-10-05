@@ -9,7 +9,7 @@
  * we pull a fresh JWT and push it into apiService so subsequent API calls
  * carry the updated Bearer header automatically.
  */
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, ReactNode } from 'react';
 import { authClient } from '@/lib/neon';
 import { apiService } from '@/services/api';
 
@@ -30,41 +30,49 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-
   const neonSession = authClient.useSession();
   const isLoading = neonSession.isPending;
+
+  // Derived directly from neonSession on every render — not copied into
+  // separate useState — so `user`/`token` are never one render behind
+  // `isLoading` flipping. That lag previously let a consumer see
+  // `isLoading === false` together with a stale `user === null` (or vice
+  // versa) for one frame, which caused incorrect redirect decisions.
+  const sessionData = neonSession.data;
+  const user: User | null = sessionData
+    ? {
+        id: sessionData.user.id,
+        email: sessionData.user.email,
+        full_name: (sessionData.user as any).name ?? null,
+      }
+    : null;
+  const token: string | null = sessionData?.session?.token ?? null;
 
   // Register a per-request token getter so apiService always sends a fresh JWT
   // even if the in-memory token has expired. This also means we don't need to
   // push the token into apiService eagerly — the getter fetches it on demand.
+  // This remains a useEffect because it's an imperative side effect on a
+  // singleton, not a value this component renders.
   useEffect(() => {
-    if (neonSession.data) {
+    if (sessionData) {
       apiService.setTokenGetter(async () => {
         try {
           const { data } = await authClient.token();
-          return data?.token ?? neonSession.data?.session?.token ?? null;
+          return data?.token ?? sessionData.session?.token ?? null;
         } catch {
-          return neonSession.data?.session?.token ?? null;
+          return sessionData.session?.token ?? null;
         }
       });
-      const neonUser = neonSession.data.user;
-      setUser({ id: neonUser.id, email: neonUser.email, full_name: (neonUser as any).name ?? null });
-      // Keep a cached token in state for callers that read it synchronously (e.g. Reports).
-      const sessionToken = neonSession.data.session?.token ?? null;
-      setToken(sessionToken);
-    } else if (!neonSession.isPending) {
+    } else if (!isLoading) {
       apiService.setTokenGetter(null);
       apiService.setToken(null);
-      setToken(null);
-      setUser(null);
     }
-  }, [neonSession.data, neonSession.isPending]);
+  }, [sessionData, isLoading]);
 
-  const login = (newToken: string, newUser: User) => {
-    setToken(newToken);
-    setUser(newUser);
+  // No longer called anywhere (Login now goes through authClient directly,
+  // and user/token are derived from the Neon session above) — kept only so
+  // the AuthContextType surface doesn't change for any other caller.
+  const login = (newToken: string, _newUser: User) => {
     apiService.setToken(newToken);
   };
 
@@ -72,8 +80,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authClient.signOut();
     apiService.setTokenGetter(null);
     apiService.setToken(null);
-    setToken(null);
-    setUser(null);
     try {
       localStorage.removeItem('auth_token');
       localStorage.removeItem('auth_user');

@@ -33,7 +33,7 @@ const Reports = () => {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!token) {
+    if (!user) {
       navigate('/login');
       return;
     }
@@ -42,7 +42,7 @@ const Reports = () => {
       .then((data) => setReports(data))
       .catch((e) => setError(e.message ?? 'Failed to load reports'))
       .finally(() => setLoading(false));
-  }, [token, authLoading, navigate]);
+  }, [user, authLoading, navigate]);
 
   const handleDelete = async (id: string) => {
     try {
